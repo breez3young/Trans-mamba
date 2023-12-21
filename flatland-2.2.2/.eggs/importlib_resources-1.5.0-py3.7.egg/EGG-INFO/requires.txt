@@ -1,0 +1,7 @@
+zipp>=0.4
+importlib-metadata
+
+[docs]
+sphinx
+rst.linker
+jaraco.packaging
