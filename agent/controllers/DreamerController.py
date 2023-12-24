@@ -23,9 +23,9 @@ class DreamerController:
         # ---------
 
         # world model (transformer)
-        self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
-                                  config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
-                                  is_continuous=False).eval()
+        # self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
+        #                           config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
+        #                           is_continuous=False).eval()
         # -------------------------
 
         self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
@@ -37,7 +37,7 @@ class DreamerController:
 
     def receive_params(self, params):
         self.tokenizer.load_state_dict(params['tokenizer'])
-        self.model.load_state_dict(params['model'])
+        # self.model.load_state_dict(params['model'])
         self.actor.load_state_dict(params['actor'])
 
     def init_buffer(self):

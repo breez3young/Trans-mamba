@@ -69,12 +69,13 @@ class DreamerLearner:
         self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
                                   is_continuous=False).to(config.DEVICE).eval()
+        # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
 
-        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(
-            config.DEVICE)
+        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
         self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
         # self.critic = AugmentedCritic(config.FEAT, config.HIDDEN).to(config.DEVICE)
+
 
         initialize_weights(self.model, mode='xavier')
         initialize_weights(self.actor)
@@ -93,9 +94,9 @@ class DreamerLearner:
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
     def init_optimizers(self):
-        self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr, betas=(self.config.t_beta1, self.config.t_beta2))
-        # self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
-        self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
+        self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
+        self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
+        # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.config.ACTOR_LR, weight_decay=0.00001)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.config.VALUE_LR)
 
@@ -124,7 +125,7 @@ class DreamerLearner:
         sys.stdout.flush()
 
         intermediate_losses = defaultdict(float)
-        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=True):
+        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=False):
             samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
             loss_dict = self.train_tokenizer(samples)
 
@@ -132,14 +133,14 @@ class DreamerLearner:
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
 
-        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=True):
+        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=False):
             samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
             loss_dict = self.train_model(samples)
 
             for loss_name, loss_value in loss_dict.items():
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=True):
+        for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=False):
             samples = self.replay_buffer.sample_n(self.config.BATCH_SIZE)
             self.train_agent_with_transformer(samples)
 

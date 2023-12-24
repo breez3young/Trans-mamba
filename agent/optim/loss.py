@@ -47,6 +47,8 @@ def model_loss(config, model, obs, action, av_action, reward, done, fake, last):
     return model_loss
 
 # transformer imagination
+import sys
+from tqdm import tqdm
 def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, critic, config):
     n_agents = obs.shape[2]
     sequence_length = obs.shape[1]
@@ -54,7 +56,10 @@ def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, cr
     with FreezeParameters([tokenizer, world_model]):
         wm_env = MAWorldModelEnv(tokenizer=tokenizer, world_model=world_model, device=config.DEVICE, env_name='sc2')
         # for seq_t in tqdm(range(sequence_length), desc=f"Imagining sequences", file=sys.stdout):
-            # items = rollout_policy_trans(wm_env, actor, config.HORIZON, obs[:, seq_t], av_actions[:, seq_t])
+        #     item = rollout_policy_trans(wm_env, actor, config.HORIZON, obs[:, seq_t], av_actions[:, seq_t])
+        #     items_list.append(item)
+        
+        # items = {k: torch.cat([ele[k] for ele in items_list], dim=1) for k in items_list[0].keys()}
         
         items = rollout_policy_trans(wm_env, actor, config.HORIZON,
                                      obs.reshape(-1, n_agents, obs.shape[-1]),

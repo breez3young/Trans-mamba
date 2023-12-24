@@ -32,6 +32,10 @@ def get_env_info(configs, env):
         config.IN_DIM = env.n_obs
         config.ACTION_SIZE = env.n_actions
         config.NUM_AGENTS = env.n_agents
+    
+    print(f'Observation dims: {env.n_obs}')
+    print(f'Action dims: {env.n_actions}')
+    print(f'Num agents: {env.n_agents}')
     env.close()
 
 
@@ -43,7 +47,7 @@ def get_env_info_flatland(configs):
 
 def prepare_starcraft_configs(env_name):
     agent_configs = [DreamerControllerConfig(), DreamerLearnerConfig()]
-    env_config = StarCraftConfig(env_name)
+    env_config = StarCraftConfig(env_name, RANDOM_SEED)
     get_env_info(agent_configs, env_config.create_env())
     return {"env_config": (env_config, 100),
             "controller_config": agent_configs[0],

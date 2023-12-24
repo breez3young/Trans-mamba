@@ -50,8 +50,8 @@ class MAWorldModel(nn.Module):
 
         self.before_q = nn.Parameter(torch.randn(num_agents, perattn_config.query_dim))
 
-        self.agent_id_pos_emb = nn.Embedding(num_agents, perattn_config.context_dim)
-        # self.agent_id_pos_emb = get_sinusoid_encoding_table(30, perattn_config.context_dim)
+        self.agent_id_pos_emb = get_sinusoid_encoding_table(30, perattn_config.context_dim)
+        # self.agent_id_pos_emb = nn.Embedding(num_agents, perattn_config.context_dim)
         ## --------------------
 
         self.num_action_tokens = num_action_tokens  # for continuous task, this should be dimension of joint action (e.g. like ManiSkill2)
@@ -193,8 +193,8 @@ class MAWorldModel(nn.Module):
 
         b, l, N, M, e = input_encodings.shape
 
-        # input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb[:, :self.num_agents].unsqueeze(-2).expand(b * l, -1, M, -1).clone().detach().to(device)
-        input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb(torch.arange(self.num_agents).to(device)).unsqueeze(-2).expand(-1, M, -1)
+        input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb[:, :self.num_agents].unsqueeze(-2).expand(b * l, -1, M, -1).clone().detach().to(device)
+        # input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb(torch.arange(self.num_agents).to(device)).unsqueeze(-2).expand(-1, M, -1)
         input_encodings = rearrange(input_encodings, 'b n m e -> b (n m) e')
 
         perattn_out = self.perattn(self.before_q.unsqueeze(0).expand(input_encodings.size(0), -1, -1), input_encodings)
@@ -282,8 +282,8 @@ class MAWorldModel(nn.Module):
         n, m, e = input_encodings.shape[-3:]
         input_encodings = input_encodings.reshape(-1, n, m, e)
 
-        # input_encodings += self.agent_id_pos_emb[:, :n].unsqueeze(-2).expand(input_encodings.size(0), -1, m, -1).clone().detach().to(device)
-        input_encodings += self.agent_id_pos_emb(torch.arange(n).to(device)).unsqueeze(-2).expand(-1, m, -1)
+        input_encodings += self.agent_id_pos_emb[:, :n].unsqueeze(-2).expand(input_encodings.size(0), -1, m, -1).clone().detach().to(device)
+        # input_encodings += self.agent_id_pos_emb(torch.arange(n).to(device)).unsqueeze(-2).expand(-1, m, -1)
         input_encodings = rearrange(input_encodings, 'b n m e -> b (n m) e')
         perattn_out = self.perattn(self.before_q.unsqueeze(0).expand(input_encodings.size(0), -1, -1), input_encodings)
         

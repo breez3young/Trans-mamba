@@ -3,8 +3,8 @@ from smac.env import StarCraft2Env
 
 class StarCraft:
 
-    def __init__(self, env_name):
-        self.env = StarCraft2Env(map_name=env_name, continuing_episode=True, difficulty="7")
+    def __init__(self, env_name, seed):
+        self.env = StarCraft2Env(map_name=env_name, continuing_episode=True, difficulty="7", seed=seed)
         env_info = self.env.get_env_info()
 
         self.n_obs = env_info["obs_shape"]

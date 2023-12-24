@@ -64,7 +64,7 @@ class DreamerConfig(Config):
         self.IN_DIM = 30
 
         # tokenizer params
-        self.nums_obs_token = 4
+        self.nums_obs_token = 12 # 4
         self.hidden_sizes = [256]
         self.alpha = 1.0
         self.EMBED_DIM = 128
@@ -79,7 +79,7 @@ class DreamerConfig(Config):
         
         # world model params
         self.HORIZON = 20
-        self.TRANS_EMBED_DIM = 256
+        self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
         self.DROPOUT = 0.1
         
@@ -95,7 +95,7 @@ class DreamerConfig(Config):
             tokens_per_block=self.nums_obs_token + 1 + 1,
             max_blocks=self.HORIZON,
             attention='causal',
-            num_layers=10,
+            num_layers=6, # 10
             num_heads=self.HEADS,
             embed_dim=self.TRANS_EMBED_DIM,
             embed_pdrop=self.DROPOUT,

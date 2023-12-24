@@ -15,11 +15,12 @@ class EnvConfig(Config):
 
 class StarCraftConfig(EnvConfig):
 
-    def __init__(self, env_name):
+    def __init__(self, env_name, seed):
         self.env_name = env_name
+        self.seed = seed
 
     def create_env(self):
-        return StarCraft(self.env_name)
+        return StarCraft(self.env_name, self.seed)
 
 
 class FlatlandConfig(EnvConfig):
