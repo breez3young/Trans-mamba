@@ -1,4 +1,7 @@
 import argparse
+import os
+import shutil
+from pathlib import Path
 
 from agent.runners.DreamerRunner import DreamerRunner
 from configs import Experiment, SimpleObservationConfig, NearRewardConfig, DeadlockPunishmentConfig, RewardsComposerConfig
@@ -96,11 +99,32 @@ if __name__ == "__main__":
     global wandb
     import wandb
     wandb.init(
+        config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project='sc2' if args.env == Env.STARCRAFT else 'flatland',
         group=f"{args.env_name}_mawm_based_on_mamba",
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_200_xavier_initialize_wm-adam_optimizer',
     )
+
+    # make run directory
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / args.env_name
+    if not run_dir.exists():
+        curr_run = 'run1'
+    else:
+        exst_run_nums = [int(str(folder.name).split('run')[1]) for folder in run_dir.iterdir() if
+                            str(folder.name).startswith('run')]
+        if len(exst_run_nums) == 0:
+            curr_run = 'run1'
+        else:
+            curr_run = 'run%i' % (max(exst_run_nums) + 1)
+    
+    run_dir = run_dir / curr_run
+    if not run_dir.exists():
+        os.makedirs(str(run_dir))
+
+    shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "agent"), dst=run_dir / "agent")
+    shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "configs"), dst=run_dir / "configs")
+    # -------------------
 
     exp = Experiment(steps=args.steps,
                      episodes=50000,
