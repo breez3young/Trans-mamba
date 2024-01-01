@@ -96,16 +96,6 @@ if __name__ == "__main__":
     configs["learner_config"].ENV_TYPE = Env(args.env)
     configs["controller_config"].ENV_TYPE = Env(args.env)
 
-    global wandb
-    import wandb
-    wandb.init(
-        config=configs["learner_config"].to_dict(),
-        mode=args.mode,
-        project='sc2' if args.env == Env.STARCRAFT else 'flatland',
-        group=f"{args.env_name}_mawm_based_on_mamba",
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_200_xavier_initialize_wm-adam_optimizer',
-    )
-
     # make run directory
     run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / args.env_name
     if not run_dir.exists():
@@ -125,6 +115,18 @@ if __name__ == "__main__":
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "agent"), dst=run_dir / "agent")
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "configs"), dst=run_dir / "configs")
     # -------------------
+
+    configs["learner_config"].RUN_DIR = str(run_dir)
+
+    global wandb
+    import wandb
+    wandb.init(
+        config=configs["learner_config"].to_dict(),
+        mode=args.mode,
+        project='sc2' if args.env == Env.STARCRAFT else 'flatland',
+        group=f"{args.env_name}_mawm_based_on_mamba",
+        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_annealing_{configs["learner_config"].ENTROPY_ANNEALING}_st_policy_on_rec',
+    )
 
     exp = Experiment(steps=args.steps,
                      episodes=50000,

@@ -46,7 +46,7 @@ class MAWorldModel(nn.Module):
         self.bidirectional_attn_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=perattn_config.query_dim, nhead=perattn_config.heads,
                                                                                            dim_feedforward=perattn_config.query_dim,
                                                                                            dropout=perattn_config.dropout,
-                                                                                           batch_first=True), 2)
+                                                                                           batch_first=True, norm_first=True), 2)
 
         self.before_q = nn.Parameter(torch.randn(num_agents, perattn_config.query_dim))
 
@@ -136,7 +136,7 @@ class MAWorldModel(nn.Module):
                 )
             )
 
-        # self.apply(init_weights)
+        self.apply(init_weights)
 
     def __repr__(self) -> str:
         return "multi_agent_world_model"
@@ -303,30 +303,34 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
     dones = []
 
     # initialize wm_env
-    _ = wm_env.reset_from_initial_observations(initial_obs)
+    rec_obs = wm_env.reset_from_initial_observations(initial_obs)
 
     av_action = initial_av_action
     for t in range(horizons):
         feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
         critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
-        action, pi = policy(feat)
+        # action, pi = policy(feat)
+        action, pi = policy(rec_obs)
+
         if av_action is not None:
             pi[av_action == 0] = -1e10
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample().squeeze(0)
             av_actions.append(av_action.squeeze(0))
         
-        actor_feats.append(feat)
+        # actor_feats.append(feat)
+        actor_feats.append(rec_obs)
+
         critic_feats.append(critic_feat)
         policies.append(pi)
         actions.append(action)
 
-        obs, reward, done, av_action = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
+        rec_obs, reward, done, av_action = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
         rewards.append(reward)
         dones.append(done)
 
-    return {"actor_feats": torch.stack(actor_feats, dim=0),
+    return {"actor_feats": torch.stack(actor_feats, dim=0), # torch.stack(actor_feats, dim=0),
             "critic_feats": torch.stack(critic_feats, dim=0),
             "actions": torch.stack(actions, dim=0),
             "av_actions": torch.stack(av_actions, dim=0) if len(av_actions) > 0 else None,

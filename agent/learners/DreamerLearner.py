@@ -72,12 +72,12 @@ class DreamerLearner:
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
 
-        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
         self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
         # self.critic = AugmentedCritic(config.FEAT, config.HIDDEN).to(config.DEVICE)
 
 
-        initialize_weights(self.model, mode='xavier')
+        # initialize_weights(self.model, mode='xavier')
         initialize_weights(self.actor)
         initialize_weights(self.critic, mode='xavier')
         self.old_critic = deepcopy(self.critic)
@@ -85,6 +85,7 @@ class DreamerLearner:
                                            config.DEVICE, config.ENV_TYPE)
         self.entropy = config.ENTROPY
         self.step_count = -1
+        self.train_count = 0
         self.cur_wandb_epoch = 0
         self.cur_update = 1
         self.accum_samples = 0
@@ -124,6 +125,8 @@ class DreamerLearner:
         self.accum_samples = 0
         sys.stdout.flush()
 
+        self.train_count += 1
+
         intermediate_losses = defaultdict(float)
         for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=False):
             samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
@@ -132,17 +135,18 @@ class DreamerLearner:
             for loss_name, loss_value in loss_dict.items():
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
+        if self.train_count > 20:
+            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=False):
+                samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
+                loss_dict = self.train_model(samples)
 
-        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=False):
-            samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
-            loss_dict = self.train_model(samples)
+                for loss_name, loss_value in loss_dict.items():
+                    intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-            for loss_name, loss_value in loss_dict.items():
-                intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
-
-        for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=False):
-            samples = self.replay_buffer.sample_n(self.config.BATCH_SIZE)
-            self.train_agent_with_transformer(samples)
+        if self.train_count > 45:
+            for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=False):
+                samples = self.replay_buffer.sample_n(self.config.BATCH_SIZE)
+                self.train_agent_with_transformer(samples)
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         self.cur_wandb_epoch += 1

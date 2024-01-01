@@ -67,8 +67,8 @@ class DreamerConfig(Config):
         self.nums_obs_token = 12 # 4
         self.hidden_sizes = [256]
         self.alpha = 1.0
-        self.EMBED_DIM = 128
-        self.OBS_VOCAB_SIZE = 512
+        self.EMBED_DIM = 512 # 128
+        self.OBS_VOCAB_SIZE = 512 # 512
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 
@@ -81,12 +81,13 @@ class DreamerConfig(Config):
         self.HORIZON = 20
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
+        self.perattn_HEADS = 8
         self.DROPOUT = 0.1
         
         self.perattn_config = PerAttnConfig(
             query_dim=self.TRANS_EMBED_DIM,
             context_dim=self.TRANS_EMBED_DIM,
-            heads=self.HEADS,
+            heads=self.perattn_HEADS, # self.HEADS
             dim_head=64,
             dropout=self.DROPOUT,
         )

@@ -123,8 +123,8 @@ class Tokenizer(nn.Module):
         beta = 0.25
         commitment_loss = (z.detach() - z_quantized).pow(2).mean() + beta * (z - z_quantized.detach()).pow(2).mean()
         
-        # reconstruction_loss = torch.abs(observations - reconstructions).mean()
-        reconstruction_loss = F.mse_loss(reconstructions, observations)
+        reconstruction_loss = torch.abs(observations - reconstructions).mean()
+        # reconstruction_loss = F.mse_loss(reconstructions, observations)
 
         rec_error = torch.linalg.norm(reconstructions.detach() - observations.detach(), dim=-1).detach().mean()
 
