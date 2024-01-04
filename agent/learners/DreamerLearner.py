@@ -18,6 +18,8 @@ from networks.dreamer.critic import AugmentedCritic, Critic
 from agent.models.tokenizer import Tokenizer, StateDecoder, StateEncoder
 from agent.models.world_model import MAWorldModel
 from utils import configure_optimizer
+from episode import SC2Episode
+from dataset import MultiAgentEpisodesDataset
 
 import wandb
 import ipdb
@@ -81,8 +83,11 @@ class DreamerLearner:
         initialize_weights(self.actor)
         initialize_weights(self.critic, mode='xavier')
         self.old_critic = deepcopy(self.critic)
-        self.replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
-                                           config.DEVICE, config.ENV_TYPE)
+        
+        self.replay_buffer = MultiAgentEpisodesDataset(max_ram_usage="30G", name="train_dataset")
+        # self.replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
+        #                                    config.DEVICE, config.ENV_TYPE)
+
         self.entropy = config.ENTROPY
         self.step_count = -1
         self.train_count = 0
@@ -93,6 +98,8 @@ class DreamerLearner:
         self.init_optimizers()
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
+
+        self.tqdm_vis = True
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -113,8 +120,11 @@ class DreamerLearner:
 
         self.accum_samples += len(rollout['action'])
         self.total_samples += len(rollout['action'])
-        self.replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
-                                  rollout['fake'], rollout['last'], rollout.get('avail_action'))
+
+        self.add_experience_to_dataset(rollout)
+        # self.replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
+        #                           rollout['fake'], rollout['last'], rollout.get('avail_action'))
+        
         self.step_count += 1
         if self.accum_samples < self.config.N_SAMPLES:
             return
@@ -128,7 +138,7 @@ class DreamerLearner:
         self.train_count += 1
 
         intermediate_losses = defaultdict(float)
-        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=False):
+        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
             samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
             loss_dict = self.train_tokenizer(samples)
 
@@ -136,7 +146,7 @@ class DreamerLearner:
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
         if self.train_count > 20:
-            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=False):
+            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
                 loss_dict = self.train_model(samples)
 
@@ -144,7 +154,7 @@ class DreamerLearner:
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
         if self.train_count > 45:
-            for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=False):
+            for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_n(self.config.BATCH_SIZE)
                 self.train_agent_with_transformer(samples)
 
@@ -247,3 +257,18 @@ class DreamerLearner:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         opt.step()
+
+    ## add data to dataset
+    def add_experience_to_dataset(self, data):
+        episode = SC2Episode(
+            observation=torch.FloatTensor(data['observation'].copy()),
+            action=torch.FloatTensor(data['action'].copy()),
+            av_action=torch.FloatTensor(data['avail_action'].copy()),
+            reward=torch.FloatTensor(data['reward'].copy()),
+            done=torch.FloatTensor(data['done'].copy()),
+            filled=torch.ones(data['done'].shape[0], dtype=torch.bool)
+        )
+
+        self.replay_buffer.add_episode(episode)
+
+        

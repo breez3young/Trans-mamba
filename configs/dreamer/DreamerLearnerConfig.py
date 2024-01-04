@@ -48,6 +48,7 @@ class DreamerLearnerConfig(DreamerConfig):
         self.GRAD_CLIP_POLICY = 100.0
 
         # tokenizer
+        self.t_bs = 256
         self.t_lr = 5e-4
 
         # world model

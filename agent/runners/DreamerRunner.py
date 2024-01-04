@@ -36,6 +36,7 @@ class DreamerRunner:
 
         while True:
             rollout, info = self.server.run()
+            ipdb.set_trace()
             self.learner.step(rollout)
             cur_steps += info["steps_done"]
             cur_episode += 1

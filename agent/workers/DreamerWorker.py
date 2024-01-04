@@ -106,19 +106,21 @@ class DreamerWorker:
 
             state = next_state
             if all([done[key] == 1 for key in range(self.env.n_agents)]):
-                if self._check_termination(info, steps_done):
-                    obs = torch.cat([self.get_absorbing_state() for i in range(self.env.n_agents)]).unsqueeze(0)
-                    actions = torch.zeros(1, self.env.n_agents, actions.shape[-1])
-                    index = torch.randint(0, actions.shape[-1], actions.shape[:-1], device=actions.device)
-                    actions.scatter_(2, index.unsqueeze(-1), 1.)
-                    items = {"observation": obs,
-                             "action": actions,
-                             "reward": torch.zeros(1, self.env.n_agents, 1),
-                             "fake": torch.ones(1, self.env.n_agents, 1),
-                             "done": torch.ones(1, self.env.n_agents, 1),
-                             "avail_action": torch.ones_like(actions) if self.env_type == Env.STARCRAFT else None}
-                    self.controller.update_buffer(items)
-                    self.controller.update_buffer(items)
+                #### 这部分加入吸收态，可以等按照iris原来的data设置然后跑出实验结果后，再说
+                # if self._check_termination(info, steps_done):
+                #     obs = torch.cat([self.get_absorbing_state() for i in range(self.env.n_agents)]).unsqueeze(0)
+                #     actions = torch.zeros(1, self.env.n_agents, actions.shape[-1])
+                #     index = torch.randint(0, actions.shape[-1], actions.shape[:-1], device=actions.device)
+                #     actions.scatter_(2, index.unsqueeze(-1), 1.)
+                #     items = {"observation": obs,
+                #              "action": actions,
+                #              "reward": torch.zeros(1, self.env.n_agents, 1),
+                #              "fake": torch.ones(1, self.env.n_agents, 1),
+                #              "done": torch.ones(1, self.env.n_agents, 1),
+                #              "avail_action": torch.ones_like(actions) if self.env_type == Env.STARCRAFT else None}
+                #     self.controller.update_buffer(items)
+                #     self.controller.update_buffer(items)
+
                 break
 
         if self.env_type == Env.FLATLAND:

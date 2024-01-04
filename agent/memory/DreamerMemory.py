@@ -4,6 +4,7 @@ import torch
 from environments import Env
 
 
+
 class DreamerMemory:
     def __init__(self, capacity, sequence_length, action_size, obs_size, n_agents, device, env_type):
         self.capacity = capacity
