@@ -103,13 +103,11 @@ class Tokenizer(nn.Module):
     def compute_loss(self, batch, **kwargs: Any) -> LossWithIntermediateLosses:
         '''
         batch:
-        - state: (B, T, S_dim)
-        - obs: (B, T, N, Obs_dim)
-        - actions: (B, T, N)
-        - avail_actions: (B, T, N, Act_dim)
-        - reward: (B, T)
-        - terminated: (B, T)
-        - actions_onehot: (B, T, N, Act_dim)
+        - observation: (B, T, N, obs_dim)
+        - actions: (B, T, N, act_dim)  (one-hot manner)
+        - av_action: (B, T, N, act_dim)
+        - reward: (B, T, N, 1)
+        - done: (B, T, N, 1)
         - filled: (B, T)
         '''
         assert len(batch['observation'].shape) == 4, "Expected nums of dimensions of batch['obs'] is 4"

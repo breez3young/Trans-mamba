@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
+from typing import Dict
 
 import numpy as np
 import torch
@@ -74,7 +75,7 @@ class DreamerLearner:
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
 
-        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
         self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
         # self.critic = AugmentedCritic(config.FEAT, config.HIDDEN).to(config.DEVICE)
 
@@ -99,7 +100,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = True
+        self.tqdm_vis = False
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -129,7 +130,7 @@ class DreamerLearner:
         if self.accum_samples < self.config.N_SAMPLES:
             return
 
-        if len(self.replay_buffer) < self.config.MIN_BUFFER_SIZE:
+        if self.replay_buffer.num_steps < self.config.MIN_BUFFER_SIZE:
             return
 
         self.accum_samples = 0
@@ -138,24 +139,37 @@ class DreamerLearner:
         self.train_count += 1
 
         intermediate_losses = defaultdict(float)
+        # train tokenzier
         for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
-            samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
+            samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.t_bs,
+                                                      sequence_length=1,
+                                                      sample_from_start=True)
+            samples = self._to_device(samples)
             loss_dict = self.train_tokenizer(samples)
 
             for loss_name, loss_value in loss_dict.items():
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
         if self.train_count > 20:
+            # train transformer-based world model
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_n(self.config.MODEL_BATCH_SIZE)
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
+                                                          sequence_length=self.config.SEQ_LENGTH,
+                                                          sample_from_start=True)
+                samples = self._to_device(samples)
                 loss_dict = self.train_model(samples)
 
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
         if self.train_count > 45:
+            # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_n(self.config.BATCH_SIZE)
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
+                                                          sequence_length=self.config.SEQ_LENGTH,
+                                                          sample_from_start=False,
+                                                          valid_sample=True)
+                samples = self._to_device(samples)
                 self.train_agent_with_transformer(samples)
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
@@ -193,10 +207,13 @@ class DreamerLearner:
     #     self.model.eval()
 
     def train_agent_with_transformer(self, samples):
+        self.tokenizer.eval()
+        self.model.eval()
+
         actions, av_actions, old_policy, actor_feat, critic_feat, returns \
               = trans_actor_rollout(samples['observation'],
                                     samples['av_action'],
-                                    samples['last'],
+                                    samples['done'], # samples['last']
                                     self.tokenizer, self.model,
                                     self.actor,
                                     self.critic,
@@ -270,5 +287,8 @@ class DreamerLearner:
         )
 
         self.replay_buffer.add_episode(episode)
+
+    def _to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        return {k: batch[k].to(self.config.DEVICE) for k in batch}
 
         

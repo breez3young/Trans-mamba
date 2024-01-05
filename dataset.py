@@ -62,19 +62,24 @@ class EpisodesDataset:
         self.newly_modified_episodes.add(episode_id)
         return episode_id
 
-    def sample_batch(self, batch_num_samples: int, sequence_length: int, sample_from_start: bool = True) -> Batch:
-        return self._collate_episodes_segments(self._sample_episodes_segments(batch_num_samples, sequence_length, sample_from_start))
+    def sample_batch(self, batch_num_samples: int, sequence_length: int, sample_from_start: bool = True, valid_sample: bool = False) -> Batch:
+        return self._collate_episodes_segments(self._sample_episodes_segments(batch_num_samples, sequence_length, sample_from_start, valid_sample))
 
-    def _sample_episodes_segments(self, batch_num_samples: int, sequence_length: int, sample_from_start: bool) -> List[Episode]:
+    def _sample_episodes_segments(self, batch_num_samples: int, sequence_length: int, sample_from_start: bool, valid_sample: bool) -> List[Episode]:
         sampled_episodes = random.choices(self.episodes, k=batch_num_samples)
         sampled_episodes_segments = []
         for sampled_episode in sampled_episodes:
-            if sample_from_start:
-                start = random.randint(0, len(sampled_episode) - 1)
-                stop = start + sequence_length
+            if not valid_sample:
+                if sample_from_start:
+                    start = random.randint(0, len(sampled_episode) - 1)
+                    stop = start + sequence_length
+                else:
+                    stop = random.randint(1, len(sampled_episode))
+                    start = stop - sequence_length
             else:
-                stop = random.randint(1, len(sampled_episode))
-                start = stop - sequence_length
+                start = random.randint(0, len(sampled_episode) - sequence_length)
+                stop = start + sequence_length
+
             sampled_episodes_segments.append(sampled_episode.segment(start, stop, should_pad=True))
             assert len(sampled_episodes_segments[-1]) == sequence_length
         return sampled_episodes_segments

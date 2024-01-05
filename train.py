@@ -125,7 +125,7 @@ if __name__ == "__main__":
         mode=args.mode,
         project='sc2' if args.env == Env.STARCRAFT else 'flatland',
         group=f"{args.env_name}_mawm_based_on_mamba",
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_annealing_{configs["learner_config"].ENTROPY_ANNEALING}_st_policy_on_rec',
+        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_new_critic_feat_policy_on_token_e',
     )
 
     exp = Experiment(steps=args.steps,

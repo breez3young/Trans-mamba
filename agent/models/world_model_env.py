@@ -51,9 +51,10 @@ class MAWorldModelEnv:
         if self.num_observations_tokens is None:
             self._num_observations_tokens = num_observations_tokens
 
-        _ = self.refresh_keys_values_with_initial_obs_tokens(rearrange(obs_tokens, 'b n k -> (b n) k'))
+        output_sequence = self.refresh_keys_values_with_initial_obs_tokens(rearrange(obs_tokens, 'b n k -> (b n) k'))
         self.obs_tokens = obs_tokens
-        return self.decode_obs_tokens()
+        critic_feat = rearrange(output_sequence[:, -2], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
+        return self.decode_obs_tokens(), critic_feat
 
     @torch.no_grad()
     def refresh_keys_values_with_initial_obs_tokens(self, obs_tokens: torch.LongTensor) -> torch.FloatTensor:
@@ -143,8 +144,9 @@ class MAWorldModelEnv:
         avail_action = avail_action.squeeze(1) if avail_action is not None else None
         
         obs = self.decode_obs_tokens() if should_predict_next_obs else None # obs is tensor
+        critic_feat = rearrange(output_sequence[:, -2], '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if should_predict_next_obs else None
         # share_obs = self.world_model.get_perceiver_attn_out(self.tokenizer.embedding(self.obs_tokens))
-        return obs, reward, done, avail_action  # o_t+1, r_t
+        return obs, reward, done, avail_action, critic_feat # o_t+1, r_t
 
     ## unmodified
     @torch.no_grad()

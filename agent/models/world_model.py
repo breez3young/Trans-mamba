@@ -214,18 +214,16 @@ class MAWorldModel(nn.Module):
         outputs = self(tokens, perattn_out)
 
         # compute labels
-        # labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['last'])
-        labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model_n(obs_tokens, batch['reward'], batch['done'])
-
+        labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
         logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
 
         loss_obs = F.cross_entropy(logits_observations, labels_observations)
 
         # loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
         pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-        loss_ends = -torch.mean(pred_ends.log_prob((1. - batch['done']))) # TODO check一下
+        loss_ends = -torch.mean(pred_ends.log_prob((1. - labels_ends))) # TODO check一下
 
-        loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward'])
+        loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward']) # batch['reward']已通过padding自然地将filled为False的部分置为0了
 
         w1 = 2.0
         w2 = 2.0
@@ -241,7 +239,7 @@ class MAWorldModel(nn.Module):
         
         if self.action_dim:
             pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-            loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action']))
+            loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
             loss_dict['world_model/loss_av_actions'] = loss_av_actions.item()
             loss += loss_av_actions
 
@@ -250,18 +248,15 @@ class MAWorldModel(nn.Module):
         return loss, loss_dict
         # return LossWithIntermediateLosses(**loss_dict)
 
-    def compute_labels_world_model(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor, mask_padding: torch.BoolTensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
-        mask_fill = torch.logical_not(mask_padding)
+    def compute_labels_world_model(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor, filled: torch.BoolTensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
+        mask_fill = torch.logical_not(filled)
         labels_observations = rearrange(obs_tokens.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(obs_tokens), -100).transpose(1, 2), 'b n l k -> (b n) (l k)')[:, 1:]
-        if not self.sparse:
-            labels_rewards = rewards.masked_fill(mask_fill, 0.) # 轨迹结束后的padding timestep对应的reward都设置为-100，现在预测连续reward 改为0.
-        else:
-            labels_rewards = rewards.masked_fill(mask_fill, -100.).long()
         
-        labels_ends = ends.masked_fill(mask_fill, -100)
+        labels_rewards = rewards.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(rewards), 0.) # 轨迹结束后的padding timestep对应的reward都设置为-100，现在预测连续reward 改为0.
+        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), 1.) 
         
-        return labels_observations.reshape(-1), labels_rewards.reshape(-1), labels_ends.reshape(-1)
+        return labels_observations.reshape(-1), labels_rewards, labels_ends
     
     def compute_labels_world_model_n(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
@@ -303,14 +298,14 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
     dones = []
 
     # initialize wm_env
-    rec_obs = wm_env.reset_from_initial_observations(initial_obs)
+    rec_obs, n_critic_feat = wm_env.reset_from_initial_observations(initial_obs)
 
     av_action = initial_av_action
     for t in range(horizons):
         feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
         critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
         # action, pi = policy(feat)
-        action, pi = policy(rec_obs)
+        action, pi = policy(feat)
 
         if av_action is not None:
             pi[av_action == 0] = -1e10
@@ -318,14 +313,14 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
             action = action_dist.sample().squeeze(0)
             av_actions.append(av_action.squeeze(0))
         
-        # actor_feats.append(feat)
-        actor_feats.append(rec_obs)
+        actor_feats.append(feat)
+        # actor_feats.append(rec_obs)
 
-        critic_feats.append(critic_feat)
+        critic_feats.append(n_critic_feat) # critic_feat
         policies.append(pi)
         actions.append(action)
 
-        rec_obs, reward, done, av_action = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
+        rec_obs, reward, done, av_action, n_critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
         rewards.append(reward)
         dones.append(done)

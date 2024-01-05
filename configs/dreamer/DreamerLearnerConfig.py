@@ -48,10 +48,15 @@ class DreamerLearnerConfig(DreamerConfig):
         self.GRAD_CLIP_POLICY = 100.0
 
         # tokenizer
-        self.t_bs = 256
-        self.t_lr = 5e-4
+        ## batch size
+        self.t_bs = 1024
+        ## learning rate
+        self.t_lr = 1e-4
 
         # world model
+        ## batch size
+        self.wm_bs = 64
+        ## learning rate
         self.wm_lr = 1e-4 # 5e-4
         self.wm_weight_decay = 0.01
 
