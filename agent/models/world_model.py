@@ -22,17 +22,17 @@ import ipdb
 @dataclass
 class MAWorldModelOutput:
     output_sequence: torch.FloatTensor
-    # auto_regressive_obs_repre: torch.FloatTensor
     logits_observations: torch.FloatTensor
     pred_rewards: torch.FloatTensor
     logits_ends: torch.FloatTensor
     pred_avail_action: torch.FloatTensor
+    logits_last_action: torch.FloatTensor
 
 
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
                  config: TransformerConfig, perattn_config: PerAttnConfig,
-                 action_dim: int = None, is_continuous: bool = False) -> None:
+                 action_dim: int, is_continuous: bool = False) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.is_continuous = is_continuous
@@ -43,10 +43,11 @@ class MAWorldModel(nn.Module):
         ## perceiver attention
         self.perattn_config = perattn_config
         self.perattn = PerBlock(**dataclasses.asdict(perattn_config))
-        self.bidirectional_attn_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=perattn_config.query_dim, nhead=perattn_config.heads,
-                                                                                           dim_feedforward=perattn_config.query_dim,
-                                                                                           dropout=perattn_config.dropout,
+        self.bidirectional_attn_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=perattn_config.context_dim, nhead=perattn_config.heads,
+                                                                                           dim_feedforward=perattn_config.context_dim,
+                                                                                           dropout=perattn_config.dropout, activation='gelu',
                                                                                            batch_first=True, norm_first=True), 2)
+        
 
         self.before_q = nn.Parameter(torch.randn(num_agents, perattn_config.query_dim))
 
@@ -60,14 +61,11 @@ class MAWorldModel(nn.Module):
         self.transformer = Transformer(config)
 
         act_tokens_pattern = torch.zeros(config.tokens_per_block)
-        act_tokens_pattern[-num_action_tokens - 1:-1] = 1
+        # act_tokens_pattern[-num_action_tokens - 1:-1] = 1
+        act_tokens_pattern[-1] = 1
 
         obs_tokens_pattern = torch.zeros(config.tokens_per_block)
         obs_tokens_pattern[:self.num_obs_tokens] = 1
-
-        ### for non-autoregressive manner (这是为后面的非casual attention所设计的)
-        non_autoregress_pattern = torch.zeros(config.tokens_per_block)
-        non_autoregress_pattern[:self.num_obs_tokens] = 1
         
         ### for autoregressive manner
         obs_autoregress_pattern = obs_tokens_pattern.clone()
@@ -77,8 +75,9 @@ class MAWorldModel(nn.Module):
         all_but_last_pattern = torch.zeros(config.tokens_per_block)
         all_but_last_pattern[-1] = 1
 
+        ### Perceiver Attention output pattern
         perattn_pattern = torch.zeros(config.tokens_per_block)
-        perattn_pattern[-1] = 1
+        perattn_pattern[-num_action_tokens - 1:-1] = 1
 
         # self.obs_embeddings_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
         self.perattn_slicer = Slicer(max_blocks=config.max_blocks, block_mask=perattn_pattern)
@@ -88,18 +87,46 @@ class MAWorldModel(nn.Module):
         self.embedder = Embedder(
             max_blocks=config.max_blocks,
             block_masks=[act_tokens_pattern, obs_tokens_pattern],
-            embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size, config.embed_dim), nn.Embedding(obs_vocab_size, config.embed_dim)])
+            embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size + 1, config.embed_dim), nn.Embedding(obs_vocab_size, config.embed_dim)])
         )
 
-        self.head_observations = Head(
-            max_blocks=config.max_blocks,
-            block_mask=obs_autoregress_pattern,
-            head_module=nn.Sequential(
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ReLU(),
-                nn.Linear(config.embed_dim, obs_vocab_size)
-            )
+        self.shared_module = nn.Sequential(
+            nn.Linear(config.embed_dim, config.embed_dim),
+            nn.ReLU()
         )
+
+        self.generate_obs_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
+        self.pred_last_action_slicer = Slicer(max_blocks=config.max_blocks, block_mask=all_but_last_pattern)
+        
+        self.generate_obs_head = nn.Linear(config.embed_dim, obs_vocab_size)
+        self.pred_last_action_head = nn.Sequential(
+            nn.Linear(config.embed_dim, config.embed_dim),
+            nn.ELU(),
+            nn.Linear(config.embed_dim, config.embed_dim),
+            nn.ELU(),
+            nn.Linear(config.embed_dim, action_dim),
+        )
+        # self.head_observations = Head(
+        #     max_blocks=config.max_blocks,
+        #     block_mask=obs_autoregress_pattern,
+        #     head_module=nn.Sequential(
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ReLU(),
+        #         nn.Linear(config.embed_dim, obs_vocab_size)
+        #     )
+        # )
+        # self.head_last_action = Head(
+        #     max_blocks=config.max_blocks,
+        #     block_mask=all_but_last_pattern,
+        #     head_module=nn.Sequential(
+        #         self.shared_module,
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ELU(),
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ELU(),
+        #         nn.Linear(config.embed_dim, action_dim),
+        #     )
+        # )
 
         ## 加入适合dense的reward predictor
         self.head_rewards = Head(
@@ -118,23 +145,32 @@ class MAWorldModel(nn.Module):
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ELU(),
-                # nn.Linear(config.embed_dim, 2),
                 nn.Linear(config.embed_dim, 1),
             )
         )
 
         self.action_dim = action_dim
         ## 注意这个avail_actions预测的是下一时刻的avail_actions
-        if action_dim is not None:
-            self.heads_avail_actions = Head(
-                max_blocks=config.max_blocks,
-                block_mask=all_but_last_pattern,
-                head_module=nn.Sequential(
-                    nn.Linear(config.embed_dim, config.embed_dim),
-                    nn.ELU(),
-                    nn.Linear(config.embed_dim, action_dim),
-                )
+        self.heads_avail_actions = Head(
+            max_blocks=config.max_blocks,
+            block_mask=all_but_last_pattern,
+            head_module=nn.Sequential(
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ELU(),
+                nn.Linear(config.embed_dim, action_dim),
             )
+        )
+
+        # info_loss head
+        # self.head_last_action = Head(
+        #     max_blocks=config.max_blocks,
+        #     block_mask=all_but_last_pattern,
+        #     head_module=nn.Sequential(
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ReLU(),
+        #         nn.Linear(config.embed_dim, action_dim),
+        #     )
+        # )
 
         self.apply(init_weights)
 
@@ -162,25 +198,31 @@ class MAWorldModel(nn.Module):
 
         x = self.transformer(sequences, past_keys_values)
 
-        logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
+        obs_indices = self.generate_obs_slicer.compute_slice(num_steps, prev_steps)
+        logits_observations = self.shared_module(x[:, obs_indices])
+        logits_observations = self.generate_obs_head(logits_observations)
+
+        last_action_indices = self.pred_last_action_slicer.compute_slice(num_steps, prev_steps)
+        logits_last_action = self.shared_module(x[:, last_action_indices])
+        logits_last_action = self.pred_last_action_head(logits_last_action)
+        logits_last_action = rearrange(logits_last_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
+
         pred_rewards = self.head_rewards(x, num_steps=num_steps, prev_steps=prev_steps)
         pred_rewards = rearrange(pred_rewards, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         logits_ends = self.head_ends(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_ends = rearrange(logits_ends, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
-        if self.action_dim:
-            logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
-            logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
-        else:
-            logits_avail_action = None
+        logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
+        logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
-        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action)
+        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, logits_last_action)
 
     def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any) -> LossWithIntermediateLosses:
         device = batch['observation'].device
         if not self.is_continuous:
-            action = torch.argmax(batch['action'], dim=-1, keepdim=True)
+            act_tokens = torch.argmax(batch['action'], dim=-1, keepdim=True)
+            act_tokens[batch['filled']] += 1
 
         with torch.no_grad():
             tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
@@ -188,7 +230,7 @@ class MAWorldModel(nn.Module):
 
         ### 将obs encodings和action encodings一起过perceiver attention
         obs_encodings = self.embedder.embedding_tables[1](obs_tokens)
-        action_encodings = self.embedder.embedding_tables[0](action)
+        action_encodings = self.embedder.embedding_tables[0](act_tokens)
         input_encodings = torch.cat([obs_encodings, action_encodings], dim=-2)
 
         b, l, N, M, e = input_encodings.shape
@@ -203,13 +245,13 @@ class MAWorldModel(nn.Module):
         perattn_out = rearrange(perattn_out, '(b l) n e -> (b n) l e', b=b, l=l, n=N)  ### TODO 不知道这样直接调换dim会不会和transpose有问题
         
         if not self.is_continuous:
-            tokens = torch.cat([obs_tokens, action], dim=-1) # (B, L, (K+N))
+            tokens = torch.cat([obs_tokens, torch.zeros(b, l, N, 1, dtype=torch.long).to(device), act_tokens], dim=-1)
         else:
             act_tokens = action_split_into_bins(batch['joint_actions'], self.act_vocab_size) if 'joint_actions' in batch else action_split_into_bins(batch['action'], self.act_vocab_size)
-            tokens = torch.cat([obs_tokens, act_tokens], dim=-1)
+            tokens = torch.cat([obs_tokens, torch.zeros(b, l, N, 1, dtype=torch.long).to(device), act_tokens], dim=-1)
 
         ### 生成perattn的占位符
-        tokens = torch.cat([tokens, torch.zeros(b, l, N, 1, dtype=torch.long).clone().detach().to(device)], dim=-1)  # 用于对perceiver attention output的占位
+        # tokens = torch.cat([tokens, torch.zeros(b, l, N, 1, dtype=torch.long).clone().detach().to(device)], dim=-1)  # 用于对perceiver attention output的占位
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
         outputs = self(tokens, perattn_out)
 
@@ -225,23 +267,30 @@ class MAWorldModel(nn.Module):
 
         loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward']) # batch['reward']已通过padding自然地将filled为False的部分置为0了
 
+        criterion = nn.CrossEntropyLoss(reduction='none')
+        logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
+        label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
+        fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
+        fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
+        info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
+
         w1 = 2.0
         w2 = 2.0
         w3 = 1.0
 
-        loss = loss_obs + loss_rewards + loss_ends
+        loss = loss_obs + loss_rewards + loss_ends + info_loss
 
         loss_dict = {
             'world_model/loss_obs': loss_obs.item(),
             'world_model/loss_rewards': loss_rewards.item(),
             'world_model/loss_ends': loss_ends.item(),
+            'world_model/info_loss': info_loss.item(),
         }
         
-        if self.action_dim:
-            pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-            loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
-            loss_dict['world_model/loss_av_actions'] = loss_av_actions.item()
-            loss += loss_av_actions
+        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
+        loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
+        loss_dict['world_model/loss_av_actions'] = loss_av_actions.item()
+        loss += loss_av_actions
 
         loss_dict['world_model/total_loss'] = loss.item()
 
@@ -304,8 +353,9 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
     for t in range(horizons):
         feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
         critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
+
         # action, pi = policy(feat)
-        action, pi = policy(feat)
+        action, pi = policy(rec_obs)
 
         if av_action is not None:
             pi[av_action == 0] = -1e10
@@ -313,10 +363,10 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
             action = action_dist.sample().squeeze(0)
             av_actions.append(av_action.squeeze(0))
         
-        actor_feats.append(feat)
-        # actor_feats.append(rec_obs)
+        # actor_feats.append(feat)
+        actor_feats.append(rec_obs)
 
-        critic_feats.append(n_critic_feat) # critic_feat
+        critic_feats.append(rec_obs) # critic_feat
         policies.append(pi)
         actions.append(action)
 

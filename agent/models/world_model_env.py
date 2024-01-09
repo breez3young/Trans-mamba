@@ -97,13 +97,14 @@ class MAWorldModelEnv:
             action = action_split_into_bins(action, self.world_model.act_vocab_size)
 
         # perceiver attention output
+        action += 1
         perattn_out = self.world_model.get_perceiver_attn_out(self.obs_tokens, action)
         perattn_out = rearrange(perattn_out, 'b n e -> (b n) 1 e')
         # ---------------------------
 
         token = action.clone().detach() if isinstance(action, torch.Tensor) else torch.tensor(action, dtype=torch.long).clone().detach()
         perattn_placeholder = torch.zeros(*token.shape[:-1], 1, dtype=torch.long, device=token.device)
-        token = torch.cat([token, perattn_placeholder], dim=-1)
+        token = torch.cat([perattn_placeholder, token], dim=-1)
 
         token = rearrange(token, 'b n k -> (b n) k').to(self.device)  # (B, N)
 

@@ -67,7 +67,7 @@ class PerAttention(nn.Module):
 
         self.to_q = nn.Linear(query_dim, inner_dim, bias=True)
         self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias=True)
-        self.to_out = nn.Linear(inner_dim, query_dim)
+        self.to_out = nn.Linear(inner_dim, context_dim)
         
         self.attend = nn.Softmax(dim = -1)
         self.dropout = nn.Dropout(dropout)

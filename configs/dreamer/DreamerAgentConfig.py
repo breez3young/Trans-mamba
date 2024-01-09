@@ -81,7 +81,7 @@ class DreamerConfig(Config):
         self.HORIZON = 20
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
-        self.perattn_HEADS = 8
+        self.perattn_HEADS = 4
         self.DROPOUT = 0.1
         
         self.perattn_config = PerAttnConfig(
@@ -96,7 +96,7 @@ class DreamerConfig(Config):
             tokens_per_block=self.nums_obs_token + 1 + 1,
             max_blocks=self.HORIZON,
             attention='causal',
-            num_layers=6, # 10
+            num_layers=10, # 10
             num_heads=self.HEADS,
             embed_dim=self.TRANS_EMBED_DIM,
             embed_pdrop=self.DROPOUT,
