@@ -90,43 +90,16 @@ class MAWorldModel(nn.Module):
             embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size + 1, config.embed_dim), nn.Embedding(obs_vocab_size, config.embed_dim)])
         )
 
-        self.shared_module = nn.Sequential(
-            nn.Linear(config.embed_dim, config.embed_dim),
-            nn.ReLU()
-        )
 
-        self.generate_obs_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
-        self.pred_last_action_slicer = Slicer(max_blocks=config.max_blocks, block_mask=all_but_last_pattern)
-        
-        self.generate_obs_head = nn.Linear(config.embed_dim, obs_vocab_size)
-        self.pred_last_action_head = nn.Sequential(
-            nn.Linear(config.embed_dim, config.embed_dim),
-            nn.ELU(),
-            nn.Linear(config.embed_dim, config.embed_dim),
-            nn.ELU(),
-            nn.Linear(config.embed_dim, action_dim),
+        self.head_observations = Head(
+            max_blocks=config.max_blocks,
+            block_mask=obs_autoregress_pattern,
+            head_module=nn.Sequential(
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ReLU(),
+                nn.Linear(config.embed_dim, obs_vocab_size)
+            )
         )
-        # self.head_observations = Head(
-        #     max_blocks=config.max_blocks,
-        #     block_mask=obs_autoregress_pattern,
-        #     head_module=nn.Sequential(
-        #         nn.Linear(config.embed_dim, config.embed_dim),
-        #         nn.ReLU(),
-        #         nn.Linear(config.embed_dim, obs_vocab_size)
-        #     )
-        # )
-        # self.head_last_action = Head(
-        #     max_blocks=config.max_blocks,
-        #     block_mask=all_but_last_pattern,
-        #     head_module=nn.Sequential(
-        #         self.shared_module,
-        #         nn.Linear(config.embed_dim, config.embed_dim),
-        #         nn.ELU(),
-        #         nn.Linear(config.embed_dim, config.embed_dim),
-        #         nn.ELU(),
-        #         nn.Linear(config.embed_dim, action_dim),
-        #     )
-        # )
 
         ## 加入适合dense的reward predictor
         self.head_rewards = Head(
@@ -162,15 +135,17 @@ class MAWorldModel(nn.Module):
         )
 
         # info_loss head
-        # self.head_last_action = Head(
-        #     max_blocks=config.max_blocks,
-        #     block_mask=all_but_last_pattern,
-        #     head_module=nn.Sequential(
-        #         nn.Linear(config.embed_dim, config.embed_dim),
-        #         nn.ReLU(),
-        #         nn.Linear(config.embed_dim, action_dim),
-        #     )
-        # )
+        self.head_last_action = Head(
+            max_blocks=config.max_blocks,
+            block_mask=all_but_last_pattern,
+            head_module=nn.Sequential(
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ELU(),
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ELU(),
+                nn.Linear(config.embed_dim, action_dim),
+            )
+        )
 
         self.apply(init_weights)
 
@@ -198,13 +173,9 @@ class MAWorldModel(nn.Module):
 
         x = self.transformer(sequences, past_keys_values)
 
-        obs_indices = self.generate_obs_slicer.compute_slice(num_steps, prev_steps)
-        logits_observations = self.shared_module(x[:, obs_indices])
-        logits_observations = self.generate_obs_head(logits_observations)
+        logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
 
-        last_action_indices = self.pred_last_action_slicer.compute_slice(num_steps, prev_steps)
-        logits_last_action = self.shared_module(x[:, last_action_indices])
-        logits_last_action = self.pred_last_action_head(logits_last_action)
+        logits_last_action = self.head_last_action(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_last_action = rearrange(logits_last_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         pred_rewards = self.head_rewards(x, num_steps=num_steps, prev_steps=prev_steps)
@@ -272,27 +243,26 @@ class MAWorldModel(nn.Module):
         label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
         fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
         fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
-        info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
+        # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
+        info_loss = 0.
+
+        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
+        loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
 
         w1 = 2.0
         w2 = 2.0
         w3 = 1.0
 
-        loss = loss_obs + loss_rewards + loss_ends + info_loss
+        loss = loss_obs + loss_rewards + loss_ends + loss_av_actions + info_loss
 
         loss_dict = {
             'world_model/loss_obs': loss_obs.item(),
             'world_model/loss_rewards': loss_rewards.item(),
             'world_model/loss_ends': loss_ends.item(),
-            'world_model/info_loss': info_loss.item(),
+            'world_model/loss_av_actions': loss_av_actions.item(),
+            'world_model/info_loss': 0.,
+            'world_model/total_loss': loss.item(),
         }
-        
-        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-        loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
-        loss_dict['world_model/loss_av_actions'] = loss_av_actions.item()
-        loss += loss_av_actions
-
-        loss_dict['world_model/total_loss'] = loss.item()
 
         return loss, loss_dict
         # return LossWithIntermediateLosses(**loss_dict)

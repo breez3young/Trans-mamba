@@ -104,7 +104,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = True
+        self.tqdm_vis = False
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -154,6 +154,8 @@ class DreamerLearner:
             for loss_name, loss_value in loss_dict.items():
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
+        if self.train_count == 21:
+            print('Start training world model...')
         if self.train_count > 20:
             # train transformer-based world model
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
@@ -166,6 +168,8 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
+        if self.train_count == 46:
+            print('Start training actor & critic...')
         if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):

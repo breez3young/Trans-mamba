@@ -49,7 +49,7 @@ class DreamerLearnerConfig(DreamerConfig):
 
         # tokenizer
         ## batch size
-        self.t_bs = 1024
+        self.t_bs = 256
         ## learning rate
         self.t_lr = 1e-4
 
