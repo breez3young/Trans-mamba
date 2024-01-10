@@ -34,8 +34,8 @@ class DreamerLearnerConfig(DreamerConfig):
         self.MODEL_EPOCHS = 80 # 60
         self.EPOCHS = 5 # 4; 27m epochs should be 20, agents_num ~ 10 should be 20
         self.PPO_EPOCHS = 5
-        self.MODEL_BATCH_SIZE = 20 # 40; 27m bs should be 10, agents_num ~ 10 should be 20
-        self.BATCH_SIZE = 20 # 40; 27m bs should be 8, agents_num ~ 10 should be 20
+        self.MODEL_BATCH_SIZE = 25 # 40; 27m bs should be 10, agents_num ~ 10 should be 20
+        self.BATCH_SIZE = 25 # 40; 27m bs should be 8, agents_num ~ 10 should be 20
         # self.SEQ_LENGTH = 20
         self.SEQ_LENGTH = self.HORIZON
         self.N_SAMPLES = 1
@@ -49,15 +49,15 @@ class DreamerLearnerConfig(DreamerConfig):
 
         # tokenizer
         ## batch size
-        self.t_bs = 256
+        self.t_bs = 512
         ## learning rate
-        self.t_lr = 1e-4
+        self.t_lr = 2e-4
 
         # world model
         ## batch size
         self.wm_bs = 64
         ## learning rate
-        self.wm_lr = 1e-4 # 5e-4
+        self.wm_lr = 2e-4 # 5e-4
         self.wm_weight_decay = 0.01
 
         self.max_grad_norm = 10.0

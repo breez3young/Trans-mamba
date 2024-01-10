@@ -104,7 +104,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = False
+        self.tqdm_vis = True
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -173,8 +173,8 @@ class DreamerLearner:
         if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * self.config.SEQ_LENGTH,
-                                                          sequence_length=1,
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 2,
+                                                          sequence_length=10,
                                                           sample_from_start=False,
                                                           valid_sample=True)
                 samples = self._to_device(samples)

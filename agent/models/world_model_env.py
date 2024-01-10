@@ -97,7 +97,6 @@ class MAWorldModelEnv:
             action = action_split_into_bins(action, self.world_model.act_vocab_size)
 
         # perceiver attention output
-        action += 1
         perattn_out = self.world_model.get_perceiver_attn_out(self.obs_tokens, action)
         perattn_out = rearrange(perattn_out, 'b n e -> (b n) 1 e')
         # ---------------------------

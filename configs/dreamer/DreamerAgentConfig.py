@@ -65,10 +65,10 @@ class DreamerConfig(Config):
 
         # tokenizer params
         self.nums_obs_token = 12 # 4
-        self.hidden_sizes = [256]
+        self.hidden_sizes = [256, 256, 256]
         self.alpha = 1.0
-        self.EMBED_DIM = 512 # 128
-        self.OBS_VOCAB_SIZE = 512 # 512
+        self.EMBED_DIM = 128 # 128
+        self.OBS_VOCAB_SIZE = 128 # 512
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 

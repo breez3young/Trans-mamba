@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
 import torch
+import numpy as np
 
 from episode import Episode, SC2Episode
 
@@ -18,6 +19,10 @@ class EpisodesDataset:
         self.name = name if name is not None else 'dataset'
         self.num_seen_episodes = 0
         self.episodes = deque()
+        self.visit_entries = deque()
+
+        self.sample_temperature = 20.
+
         self.episode_id_to_queue_idx = dict()
         self.newly_modified_episodes, self.newly_deleted_episodes = set(), set()
 
@@ -52,12 +57,15 @@ class EpisodesDataset:
         assert len(id_to_delete) == 1
         self.newly_deleted_episodes.add(id_to_delete[0])
         self.episode_id_to_queue_idx = {k: v - 1 for k, v in self.episode_id_to_queue_idx.items() if v > 0}
+        self.visit_entries.popleft()
         return self.episodes.popleft()
 
     def _append_new_episode(self, episode):
         episode_id = self.num_seen_episodes
         self.episode_id_to_queue_idx[episode_id] = len(self.episodes)
         self.episodes.append(episode) # 队尾存入episode
+        self.visit_entries.append(0.)
+
         self.num_seen_episodes += 1
         self.newly_modified_episodes.add(episode_id)
         return episode_id
@@ -83,6 +91,35 @@ class EpisodesDataset:
             sampled_episodes_segments.append(sampled_episode.segment(start, stop, should_pad=True))
             assert len(sampled_episodes_segments[-1]) == sequence_length
         return sampled_episodes_segments
+        # sampled_episodes_segments = []
+        # sample_probs = np.exp(- np.array(self.visit_entries) / self.sample_temperature) / np.exp(- np.array(self.visit_entries) / self.sample_temperature).sum()
+
+        # for i in range(batch_num_samples):
+        #     while True:
+        #         rand_idx = int(np.random.choice(len(self.episodes), 1, p=sample_probs))
+        #         sampled_episode = self.episodes[rand_idx]
+        #         if valid_sample:
+        #             if len(sampled_episode) - sequence_length > 0:
+        #                 break
+        #         else:
+        #             break
+            
+        #     # self.visit_entries[rand_idx] += 1
+        #     if not valid_sample:
+        #         if sample_from_start:
+        #             start = random.randint(0, len(sampled_episode) - 1)
+        #             stop = start + sequence_length
+        #         else:
+        #             stop = random.randint(1, len(sampled_episode))
+        #             start = stop - sequence_length
+        #     else:
+        #         start = random.randint(0, len(sampled_episode) - sequence_length)
+        #         stop = start + sequence_length
+
+        #     sampled_episodes_segments.append(sampled_episode.segment(start, stop, should_pad=True))
+        #     assert len(sampled_episodes_segments[-1]) == sequence_length
+        
+        # return sampled_episodes_segments
 
     def _collate_episodes_segments(self, episodes_segments: List[Episode]) -> Batch:
         episodes_segments = [e_s.__dict__ for e_s in episodes_segments]

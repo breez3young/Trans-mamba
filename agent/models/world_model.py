@@ -87,7 +87,7 @@ class MAWorldModel(nn.Module):
         self.embedder = Embedder(
             max_blocks=config.max_blocks,
             block_masks=[act_tokens_pattern, obs_tokens_pattern],
-            embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size + 1, config.embed_dim), nn.Embedding(obs_vocab_size, config.embed_dim)])
+            embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size, config.embed_dim), nn.Embedding(obs_vocab_size, config.embed_dim)])
         )
 
 
@@ -135,17 +135,17 @@ class MAWorldModel(nn.Module):
         )
 
         # info_loss head
-        self.head_last_action = Head(
-            max_blocks=config.max_blocks,
-            block_mask=all_but_last_pattern,
-            head_module=nn.Sequential(
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ELU(),
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ELU(),
-                nn.Linear(config.embed_dim, action_dim),
-            )
-        )
+        # self.head_last_action = Head(
+        #     max_blocks=config.max_blocks,
+        #     block_mask=all_but_last_pattern,
+        #     head_module=nn.Sequential(
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ELU(),
+        #         nn.Linear(config.embed_dim, config.embed_dim),
+        #         nn.ELU(),
+        #         nn.Linear(config.embed_dim, action_dim),
+        #     )
+        # )
 
         self.apply(init_weights)
 
@@ -175,8 +175,8 @@ class MAWorldModel(nn.Module):
 
         logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
 
-        logits_last_action = self.head_last_action(x, num_steps=num_steps, prev_steps=prev_steps)
-        logits_last_action = rearrange(logits_last_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
+        # logits_last_action = self.head_last_action(x, num_steps=num_steps, prev_steps=prev_steps)
+        # logits_last_action = rearrange(logits_last_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         pred_rewards = self.head_rewards(x, num_steps=num_steps, prev_steps=prev_steps)
         pred_rewards = rearrange(pred_rewards, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
@@ -187,13 +187,12 @@ class MAWorldModel(nn.Module):
         logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
-        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, logits_last_action)
+        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, None)
 
-    def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any) -> LossWithIntermediateLosses:
+    def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any):
         device = batch['observation'].device
         if not self.is_continuous:
             act_tokens = torch.argmax(batch['action'], dim=-1, keepdim=True)
-            act_tokens[batch['filled']] += 1
 
         with torch.no_grad():
             tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
@@ -232,22 +231,25 @@ class MAWorldModel(nn.Module):
 
         loss_obs = F.cross_entropy(logits_observations, labels_observations)
 
+        valid_mask = batch['filled'].clone().unsqueeze(-1).expand(-1, -1, self.num_agents).to(torch.float32)
         # loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
         pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-        loss_ends = -torch.mean(pred_ends.log_prob((1. - labels_ends))) # TODO check一下
+        loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
 
-        loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward']) # batch['reward']已通过padding自然地将filled为False的部分置为0了
+        l1_criterion = nn.SmoothL1Loss(reduction="none")
+        loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
+        loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
 
-        criterion = nn.CrossEntropyLoss(reduction='none')
-        logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
-        label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
-        fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
-        fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
+        # criterion = nn.CrossEntropyLoss(reduction='none')
+        # logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
+        # label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
+        # fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
+        # fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
         # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
         info_loss = 0.
 
         pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-        loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'])) # batch['av_action']已通过padding自然地将filled为False的部分置为0了
+        loss_av_actions = -(pred_av_actions.log_prob(batch['av_action']) * valid_mask).sum() / valid_mask.sum()
 
         w1 = 2.0
         w2 = 2.0
@@ -272,8 +274,8 @@ class MAWorldModel(nn.Module):
         mask_fill = torch.logical_not(filled)
         labels_observations = rearrange(obs_tokens.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(obs_tokens), -100).transpose(1, 2), 'b n l k -> (b n) (l k)')[:, 1:]
         
-        labels_rewards = rewards.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(rewards), 0.) # 轨迹结束后的padding timestep对应的reward都设置为-100，现在预测连续reward 改为0.
-        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), 1.) 
+        labels_rewards = rewards.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(rewards), 0.)
+        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), 0.) 
         
         return labels_observations.reshape(-1), labels_rewards, labels_ends
     
@@ -335,10 +337,9 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
         
         # actor_feats.append(feat)
         actor_feats.append(rec_obs)
-
-        critic_feats.append(rec_obs) # critic_feat
         policies.append(pi)
         actions.append(action)
+        critic_feats.append(rec_obs)
 
         rec_obs, reward, done, av_action, n_critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
