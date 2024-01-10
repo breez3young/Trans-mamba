@@ -53,9 +53,8 @@ class Tokenizer(nn.Module):
             obs = self.preprocess_input(obs)
       
         shape = obs.shape # (..., N, Obs_dim), N -> Nums of agents
-        obs = obs.reshape(-1, 1, *shape[-1:])
-        # z = torch.cat(self.encoder(obs).chunk(self.num_tokens, dim=-1), dim=-2)
-        z = rearrange(self.encoder(obs), 'b 1 (n e) -> b n e', n=self.num_tokens, e=self.embed_dim)
+        obs = obs.reshape(-1, *shape[-1:])
+        z = rearrange(self.encoder(obs), 'b (n e) -> b n e', n=self.num_tokens, e=self.embed_dim)
 
         b, n, e = z.shape  # n = tokens per obs
         z_flattened = rearrange(z, 'b n e -> (b n) e')
@@ -75,11 +74,9 @@ class Tokenizer(nn.Module):
     def decode(self, z_q: torch.Tensor, should_postprocess: bool = False):
         shape = z_q.shape # (..., N, num_tokens, embed_dim)
         z_q = z_q.view(-1, *shape[-2:])
-        z_q = rearrange(z_q, 'b n e -> b 1 (n e)')
+        z_q = rearrange(z_q, 'b n e -> b (n e)')
 
         rec = self.decoder(z_q)
-        rec.squeeze_(-2)
-        # rec = rec.reshape(*shape[:-2], *rec.shape[1:])
         rec = rec.reshape(*shape[:-2], rec.shape[-1])
         if should_postprocess:
             rec = self.postprocess_output(rec)

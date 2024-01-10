@@ -28,7 +28,7 @@ class DreamerController:
         #                           is_continuous=False).eval()
         # -------------------------
 
-        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
+        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
         self.expl_decay = config.EXPL_DECAY
         self.expl_noise = config.EXPL_NOISE
         self.expl_min = config.EXPL_MIN
@@ -92,12 +92,14 @@ class DreamerController:
         (no grad)
         """
         # nn_mask 只有在flatland才用得上
-        obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
-        feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
+        # obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
+        # feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
 
+        feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
         # feats = self.tokenizer.encode_decode(observations, True, True)
 
         action, pi = self.actor(feats)
+
         if avail_actions is not None:
             pi[avail_actions == 0] = -1e10
             action_dist = OneHotCategorical(logits=pi)

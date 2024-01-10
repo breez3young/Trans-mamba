@@ -77,7 +77,8 @@ def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, cr
 
 def trans_critic_rollout(critic, critic_feats, imag_rewards, discounts, config):
     with FreezeParameters([critic]):
-        imag_rewards = imag_rewards[:-1]
+        ipdb.set_trace()
+        imag_rewards = imag_rewards.mean(-2, keepdim=True)[:-1]
         discounts = discounts[:-1]
         value = critic(critic_feats)
         wandb.log({'Value/Max reward': imag_rewards.max(), 'Value/Min reward': imag_rewards.min(),

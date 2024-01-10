@@ -75,7 +75,7 @@ class DreamerLearner:
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
 
-        self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
         self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
         # self.critic = AugmentedCritic(config.FEAT, config.HIDDEN).to(config.DEVICE)
 
@@ -105,7 +105,6 @@ class DreamerLearner:
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
         self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
-        # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.config.ACTOR_LR, weight_decay=0.00001)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.config.VALUE_LR)
 
@@ -174,16 +173,6 @@ class DreamerLearner:
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         self.cur_wandb_epoch += 1
-        ### original code
-        # for i in range(self.config.MODEL_EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.MODEL_BATCH_SIZE)
-        #     self.train_model(samples)
-
-        
-
-        # for i in range(self.config.EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.BATCH_SIZE)
-        #     self.train_agent(samples)
     
     def train_tokenizer(self, samples):
         self.tokenizer.train()

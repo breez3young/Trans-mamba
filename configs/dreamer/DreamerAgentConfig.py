@@ -79,7 +79,7 @@ class DreamerConfig(Config):
         
         # world model params
         self.HORIZON = 20
-        self.TRANS_EMBED_DIM = 256 # 256
+        self.TRANS_EMBED_DIM = 256
         self.HEADS = 4
         self.perattn_HEADS = 8
         self.DROPOUT = 0.1
@@ -107,7 +107,7 @@ class DreamerConfig(Config):
         # 这里修改一下
         # self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
         self.FEAT = self.EMBED_DIM * self.nums_obs_token
-        self.critic_FEAT = self.TRANS_EMBED_DIM # self.TRANS_EMBED_DIM * self.nums_obs_token
+        self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
 
 
