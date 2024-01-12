@@ -97,7 +97,7 @@ if __name__ == "__main__":
     configs["controller_config"].ENV_TYPE = Env(args.env)
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / args.env_name
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/new_results") / args.env / args.env_name
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -123,9 +123,10 @@ if __name__ == "__main__":
     wandb.init(
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
-        project=args.env_name,
-        group=f"{args.env_name}_critic&policy_on_rec_rsample_final_version",
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
+        project="discretized bins",
+        group=f"{args.env_name}_MAWM_H{configs['learner_config'].HORIZON}_T{configs['learner_config'].nums_obs_token}_Vocab{configs['learner_config'].OBS_VOCAB_SIZE}",
+        # name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
+        name=f'mawm_{args.env_name}_seed{RANDOM_SEED}', # 默认model epochs为200, algo epochs为5, iris initialize, policy on reconstruction
     )
 
     exp = Experiment(steps=args.steps,
