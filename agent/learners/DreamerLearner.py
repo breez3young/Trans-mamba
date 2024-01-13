@@ -155,6 +155,8 @@ class DreamerLearner:
             for loss_name, loss_value in loss_dict.items():
                 intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
+        utilization_rate = self.compute_utilization_rate()
+
         if self.train_count == 21:
             print('Start training world model...')
         if self.train_count > 20:
@@ -182,17 +184,8 @@ class DreamerLearner:
                 self.train_agent_with_transformer(samples)
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
+        wandb.log({'epoch': self.cur_wandb_epoch, 'tokenizer/codebook_utilization_rate': utilization_rate})
         self.cur_wandb_epoch += 1
-        ### original code
-        # for i in range(self.config.MODEL_EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.MODEL_BATCH_SIZE)
-        #     self.train_model(samples)
-
-        
-
-        # for i in range(self.config.EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.BATCH_SIZE)
-        #     self.train_agent(samples)
     
     def train_tokenizer(self, samples):
         self.tokenizer.train()
@@ -208,12 +201,20 @@ class DreamerLearner:
         self.model.eval()
         return loss_dict
 
-    # def train_model(self, samples):
-    #     self.model.train()
-    #     loss = model_loss(self.config, self.model, samples['observation'], samples['action'], samples['av_action'],
-    #                       samples['reward'], samples['done'], samples['fake'], samples['last'])
-    #     self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.GRAD_CLIP)
-    #     self.model.eval()
+    @torch.no_grad()
+    def compute_utilization_rate(self):
+        cnt_tensor = torch.zeros(self.config.OBS_VOCAB_SIZE, device=self.config.DEVICE, dtype=torch.float32)
+        for i in range(10):
+            samples = self.replay_buffer.sample_batch(batch_num_samples=1024,
+                                                      sequence_length=1,
+                                                      sample_from_start=True)
+            samples = self._to_device(samples)
+            obs_tokens = self.tokenizer.encode(samples['observation']).tokens
+            cur_cnt = torch.histc(obs_tokens, bins=self.config.OBS_VOCAB_SIZE, min=0, max=self.config.OBS_VOCAB_SIZE - 1)
+            cnt_tensor += cur_cnt
+        
+        utilization_rate = (cnt_tensor != 0).sum() / self.config.OBS_VOCAB_SIZE
+        return utilization_rate.item()
 
     def train_agent_with_transformer(self, samples):
         self.tokenizer.eval()

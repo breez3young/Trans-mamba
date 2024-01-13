@@ -64,11 +64,11 @@ class DreamerConfig(Config):
         self.IN_DIM = 30
 
         # tokenizer params
-        self.nums_obs_token = 24 # 4
+        self.nums_obs_token = 12 # 4
         self.hidden_sizes = [512, 512]
         self.alpha = 1.0
         self.EMBED_DIM = 128 # 128
-        self.OBS_VOCAB_SIZE = 512 # 512
+        self.OBS_VOCAB_SIZE = 2048 # 512
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 
@@ -78,7 +78,7 @@ class DreamerConfig(Config):
         )
         
         # world model params
-        self.HORIZON = 10
+        self.HORIZON = 20
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
         self.perattn_HEADS = 4

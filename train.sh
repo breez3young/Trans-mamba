@@ -1,5 +1,5 @@
 # map: 3m  so_many_baneling 2c_vs_64zg 3s5z_vs_3s6z 6h_vs_8z 8m_vs_9m 2s_vs_1sc 2m_vs_1z
-map_name="2s_vs_1sc"
+map_name="2m_vs_1z"
 env="starcraft"
 seed=2
 
