@@ -125,9 +125,9 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="mawm_with_h_t",
-        group=f"{args.env_name}_MAWM_H{configs['learner_config'].HORIZON}_T{configs['learner_config'].nums_obs_token}_Vocab{configs['learner_config'].OBS_VOCAB_SIZE}",
+        group=f"{args.env_name}_MAWM_w/h_t_H{configs['learner_config'].HORIZON}_T{configs['learner_config'].nums_obs_token}_Vocab{configs['learner_config'].OBS_VOCAB_SIZE}",
         # name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
-        name=f'mawm_{args.env_name}_seed{RANDOM_SEED}_test2', # 默认model epochs为200, algo epochs为5, iris initialize, policy on reconstruction
+        name=f'mawm_{args.env_name}_seed{RANDOM_SEED}_bs600', # 默认model epochs为200, algo epochs为5, iris initialize, policy on reconstruction
     )
 
     exp = Experiment(steps=args.steps,
