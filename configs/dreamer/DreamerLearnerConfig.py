@@ -30,12 +30,12 @@ class DreamerLearnerConfig(DreamerConfig):
         self.ACTOR_LR = 5e-4
         self.VALUE_LR = 5e-4
         self.CAPACITY = 250000
-        self.MIN_BUFFER_SIZE = 1000 # 500
+        self.MIN_BUFFER_SIZE = 500 # 500
         self.MODEL_EPOCHS = 200 # 60
-        self.EPOCHS = 30 # 4
+        self.EPOCHS = 5 # 4
         self.PPO_EPOCHS = 5
-        self.MODEL_BATCH_SIZE = 25 # 40; 27m bs should be 10, agents_num ~ 10 should be 20
-        self.BATCH_SIZE = 90 # 40
+        self.MODEL_BATCH_SIZE = 30 # 40; 27m bs should be 10, agents_num ~ 10 should be 20
+        self.BATCH_SIZE = 30 # 40
         # self.SEQ_LENGTH = 20
         self.SEQ_LENGTH = self.HORIZON
         self.N_SAMPLES = 100 # 1
@@ -57,7 +57,7 @@ class DreamerLearnerConfig(DreamerConfig):
         ## batch size
         self.wm_bs = 64
         ## learning rate
-        self.wm_lr = 1e-4 # 5e-4
+        self.wm_lr = 2e-4 # 5e-4
         self.wm_weight_decay = 0.01
 
         self.max_grad_norm = 10.0

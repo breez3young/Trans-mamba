@@ -171,8 +171,8 @@ class DreamerLearner:
         if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.BATCH_SIZE,
-                                                          sequence_length=self.config.SEQ_LENGTH,
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.BATCH_SIZE * self.config.SEQ_LENGTH,
+                                                          sequence_length=1,
                                                           sample_from_start=False)
                 samples = self._to_device(samples)
                 self.train_agent_with_transformer(samples)

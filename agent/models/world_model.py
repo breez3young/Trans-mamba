@@ -301,8 +301,59 @@ class MAWorldModel(nn.Module):
         perattn_out = perattn_out.reshape(*shape[:-1], -1)
         return perattn_out
 
-
 def rollout_policy_trans(tokenizer, world_model, policy, config, batch):
+    bs = batch['observation'].size(0)
+    n_agents = batch['observation'].size(2)
+    device = batch['observation'].device
+    horizons = config.HORIZON
+
+    wm_env = MAWorldModelEnv(tokenizer=tokenizer, world_model=world_model, device=config.DEVICE, env_name='sc2')
+
+    feats = []
+    actions = []
+    av_actions = []
+    policies = []
+    rewards = []
+    dones = []
+
+    # initialize wm_env
+    initial_obs = batch['observation'][:, -1]
+    av_action = batch['av_action'][:, -1]
+
+    rec_obs, trans_feat = wm_env.reset_from_initial_observations(initial_obs)
+    for t in range(horizons):
+        feat = torch.cat([rec_obs, trans_feat], dim=-1)
+        action, pi = policy(feat)
+
+        if av_action is not None:
+            pi[av_action == 0] = -1e10
+            action_dist = OneHotCategorical(logits=pi)
+            action = action_dist.sample().squeeze(0)
+            av_actions.append(av_action.squeeze(0))
+        
+        # actor_feats.append(feat)
+        # critic_feats.append(feat)
+        feats.append(feat)
+        policies.append(pi)
+        actions.append(action)
+
+        rec_obs, reward, done, av_action, trans_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
+
+        rewards.append(reward)
+        dones.append(done)
+
+    return {"feats": torch.stack(feats, dim=0),
+            #"actor_feats": torch.stack(actor_feats, dim=0),
+            #"critic_feats": torch.stack(critic_feats, dim=0),
+            "actions": torch.stack(actions, dim=0),
+            "av_actions": torch.stack(av_actions, dim=0) if len(av_actions) > 0 else None,
+            "old_policy": torch.stack(policies, dim=0),
+            "rewards": torch.stack(rewards, dim=0),
+            "discounts": torch.stack(dones, dim=0),
+            }
+
+
+def rollout_policy_trans_deprecated(tokenizer, world_model, policy, config, batch):
     # credits to https://github.com/pytorch/pytorch/issues/64208
     ## helper
     gather_incomplete_left = lambda tensor, I: tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)

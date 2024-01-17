@@ -53,8 +53,8 @@ class MAWorldModelEnv:
 
         output_sequence = self.refresh_keys_values_with_initial_obs_tokens(rearrange(obs_tokens, 'b n k -> (b n) k'))
         self.obs_tokens = obs_tokens
-        # trans_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
-        return self.decode_obs_tokens() #, trans_feat
+        trans_feat = rearrange(output_sequence[:, -1].detach().clone(), '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
+        return self.decode_obs_tokens(), trans_feat
 
     @torch.no_grad()
     def refresh_keys_values_with_initial_obs_tokens(self, obs_tokens: torch.LongTensor) -> torch.FloatTensor:
@@ -98,7 +98,6 @@ class MAWorldModelEnv:
 
         # perceiver attention output
         perattn_out = self.world_model.get_perceiver_out(self.obs_tokens, action)
-        extra_info = {'perattn_out': perattn_out.detach().clone() if should_predict_next_obs else None}
         perattn_out = rearrange(perattn_out, 'b n e -> (b n) 1 e')
         # ---------------------------
 
@@ -129,7 +128,7 @@ class MAWorldModelEnv:
             
             perattn_out = None
 
-        output_sequence = torch.cat(output_sequence, dim=1)   # (B, 1 + K, E)
+        output_sequence = torch.cat(output_sequence, dim=1)   # (B, 2 + K, E)
         obs_tokens = torch.cat(obs_tokens, dim=1)             # (B, K)
 
         self.obs_tokens = rearrange(obs_tokens, '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
@@ -138,9 +137,9 @@ class MAWorldModelEnv:
         done = done.squeeze(1)
         avail_action = avail_action.squeeze(1) if avail_action is not None else None
         obs = self.decode_obs_tokens() if should_predict_next_obs else None # obs is tensor
-        extra_info['obs_tokens'] = self.obs_tokens.detach().clone() if should_predict_next_obs else None
+        trans_feat = rearrange(output_sequence[:, -1].detach().clone(), '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
 
-        return obs, reward, done, avail_action, extra_info
+        return obs, reward, done, avail_action, trans_feat
 
     ## unmodified
     @torch.no_grad()

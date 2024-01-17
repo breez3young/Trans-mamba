@@ -110,7 +110,7 @@ class DreamerController:
         tokens = torch.cat(tuple(self.history_tokens), dim=1)
         perattn_out = torch.cat(tuple(self.history_perattn_out), dim=1) if len(self.history_perattn_out) > 0 else None
         outputs_wm = self.model(tokens, perattn_out=perattn_out)
-        trans_feat = outputs_wm.output_sequence[:, -2].detach() # -1
+        trans_feat = outputs_wm.output_sequence[:, -1].detach()
         feats = torch.cat([rec_obs, trans_feat.unsqueeze(0)], dim=-1)
         
         action, pi = self.actor(feats)

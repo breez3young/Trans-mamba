@@ -64,7 +64,7 @@ class DreamerConfig(Config):
         self.IN_DIM = 30
 
         # tokenizer params
-        self.nums_obs_token = 16 # 4
+        self.nums_obs_token = 12 # 4
         self.hidden_sizes = [512, 512]
         self.alpha = 1.0
         self.EMBED_DIM = 128 # 128
