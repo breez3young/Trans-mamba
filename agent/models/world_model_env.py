@@ -53,8 +53,8 @@ class MAWorldModelEnv:
 
         output_sequence = self.refresh_keys_values_with_initial_obs_tokens(rearrange(obs_tokens, 'b n k -> (b n) k'))
         self.obs_tokens = obs_tokens
-        critic_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
-        return self.decode_obs_tokens(), critic_feat
+        # trans_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
+        return self.decode_obs_tokens() #, trans_feat
 
     @torch.no_grad()
     def refresh_keys_values_with_initial_obs_tokens(self, obs_tokens: torch.LongTensor) -> torch.FloatTensor:
@@ -97,14 +97,12 @@ class MAWorldModelEnv:
             action = action_split_into_bins(action, self.world_model.act_vocab_size)
 
         # perceiver attention output
-        perattn_out = self.world_model.get_perceiver_attn_out(self.obs_tokens, action)
+        perattn_out = self.world_model.get_perceiver_out(self.obs_tokens, action)
+        extra_info = {'perattn_out': perattn_out.detach().clone() if should_predict_next_obs else None}
         perattn_out = rearrange(perattn_out, 'b n e -> (b n) 1 e')
         # ---------------------------
 
-        token = action.clone().detach() if isinstance(action, torch.Tensor) else torch.tensor(action, dtype=torch.long).clone().detach()
-        perattn_placeholder = torch.zeros(*token.shape[:-1], 1, dtype=torch.long, device=token.device)
-        token = torch.cat([perattn_placeholder, token], dim=-1)
-
+        token = torch.cat([torch.zeros_like(action, dtype=torch.long, device=action.device), action], dim=-1)
         token = rearrange(token, 'b n k -> (b n) k').to(self.device)  # (B, N)
 
         for k in range(num_passes):  # assumption that there is only one action token.
@@ -126,7 +124,6 @@ class MAWorldModelEnv:
                     avail_action = None
 
             if k < self.num_observations_tokens:
-                ## 这里替换了token，token确实是不断更新的
                 token = Categorical(logits=outputs_wm.logits_observations).sample()
                 obs_tokens.append(token)
             
@@ -136,17 +133,14 @@ class MAWorldModelEnv:
         obs_tokens = torch.cat(obs_tokens, dim=1)             # (B, K)
 
         self.obs_tokens = rearrange(obs_tokens, '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
-        # reward = rearrange(reward, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
+
         reward = reward.squeeze(1)
-        # done = rearrange(done, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
         done = done.squeeze(1)
-        # avail_action = rearrange(avail_action, '(b n) 1 e -> b n e', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if avail_action is not None else None
         avail_action = avail_action.squeeze(1) if avail_action is not None else None
-        
         obs = self.decode_obs_tokens() if should_predict_next_obs else None # obs is tensor
-        critic_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if should_predict_next_obs else None
-        # share_obs = self.world_model.get_perceiver_attn_out(self.tokenizer.embedding(self.obs_tokens))
-        return obs, reward, done, avail_action, critic_feat # o_t+1, r_t
+        extra_info['obs_tokens'] = self.obs_tokens.detach().clone() if should_predict_next_obs else None
+
+        return obs, reward, done, avail_action, extra_info
 
     ## unmodified
     @torch.no_grad()
@@ -163,7 +157,7 @@ class MAWorldModelEnv:
         rec = self.tokenizer.decode(embedded_tokens, should_postprocess=True)
         # rec = rearrange(rec, '(b n) o -> b n o', b=int(bs / self.n_agents), n=self.n_agents)
         if self.env_name == "sc2":
-            return torch.clamp(rec, -1, 1)
+            return torch.clamp(rec, -1., 1.)
         elif self.env_name == "maniskill2":
             return rec
         else:

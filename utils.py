@@ -24,8 +24,8 @@ def configure_optimizer(model, learning_rate, weight_decay, *blacklist_module_na
     blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
-            if pn == 'before_q':
-                decay.add(pn) # 原来是no_decay
+            if pn == 'perceiver.latents':
+                no_decay.add(pn) # 原来是no_decay
             
             fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
             if any([fpn.startswith(module_name) for module_name in blacklist_module_names]):

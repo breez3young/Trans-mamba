@@ -165,7 +165,17 @@ class SC2Episode:
     def __len__(self) -> int:
         return self.observation.size(0)
     
-    def segment(self, start: int, stop: int, should_pad: bool = False) -> Episode:
+    def merge(self, other: SC2Episode) -> SC2Episode:
+        return Episode(
+            torch.cat((self.observation, other.observation), dim=0),
+            torch.cat((self.action, other.action), dim=0),
+            torch.cat((self.av_action, other.av_action), dim=0),
+            torch.cat((self.reward, other.reward), dim=0),
+            torch.cat((self.done, other.done), dim=0),
+            torch.cat((self.filled, other.filled), dim=0),
+        )
+    
+    def segment(self, start: int, stop: int, should_pad: bool = False) -> SC2Episode:
         assert start < len(self) and stop > 0 and start < stop
         padding_length_right = max(0, stop - len(self))
         padding_length_left = max(0, -start)

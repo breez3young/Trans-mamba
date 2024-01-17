@@ -47,24 +47,19 @@ def model_loss(config, model, obs, action, av_action, reward, done, fake, last):
     return model_loss
 
 # transformer imagination
-import sys
-from tqdm import tqdm
-def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, critic, config):
-    n_agents = obs.shape[2]
-    sequence_length = obs.shape[1]
-    items_list = []
-    with FreezeParameters([tokenizer, world_model]):
-        wm_env = MAWorldModelEnv(tokenizer=tokenizer, world_model=world_model, device=config.DEVICE, env_name='sc2')       
-        items = rollout_policy_trans(wm_env, actor, config.HORIZON,
-                                     obs.reshape(-1, n_agents, obs.shape[-1]),
-                                     av_actions.reshape(-1, n_agents, av_actions.shape[-1]))
+def trans_actor_rollout(batch, tokenizer, world_model, actor, critic, config):
+    n_agents = batch['observation'].shape[2]
+    sequence_length = batch['observation'].shape[1]
+    with FreezeParameters([tokenizer, world_model]):       
+        items = rollout_policy_trans(tokenizer, world_model, actor, config, batch)
     
-    returns = trans_critic_rollout(critic, items['critic_feats'], items['rewards'], items['discounts'], config)
+    with FreezeParameters([tokenizer, world_model]):
+        returns = trans_critic_rollout(critic, items['feats'], items['rewards'], items['discounts'], config)
+    
     output = [items["actions"][:-1].detach(),
               items["av_actions"][:-1].detach() if items["av_actions"] is not None else None,
               items["old_policy"][:-1].detach(),
-              items["actor_feats"][:-1].detach(),
-              items["critic_feats"][:-1].detach(),
+              items["feats"][:-1].detach(),
               returns.detach()]
     return [batch_multi_agent(v, n_agents) for v in output]
 

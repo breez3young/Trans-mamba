@@ -388,19 +388,19 @@ class StateEncoder(nn.Module):
             if i != length - 1:
                 self.layers.append(nn.Sequential(
                     nn.Linear(ch_in, ch_out),
-                    # nn.ELU(alpha=config.alpha)
+                    nn.LayerNorm(ch_out),
                     nn.ReLU()
                 ))
             else:
                 self.layers.append(nn.Linear(ch_in, ch_out))
         
-        self.embed_ln = nn.LayerNorm(config.z_channels)
+        # self.embed_ln = nn.LayerNorm(config.z_channels)
         
     def forward(self, x): # x: (B, T, N, Obs_dim)
         for i, l in enumerate(self.layers):
             x = l(x)
 
-        x = self.embed_ln(x)
+        # x = self.embed_ln(x)
         return x
 
 
@@ -417,7 +417,7 @@ class StateDecoder(nn.Module):
             if i != length - 1:
                 self.layers.append(nn.Sequential(
                     nn.Linear(ch_in, ch_out),
-                    # nn.ELU(alpha=config.alpha)
+                    nn.LayerNorm(ch_out),
                     nn.ReLU()
                 ))
             else:

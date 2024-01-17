@@ -10,5 +10,7 @@ class DreamerControllerConfig(DreamerConfig):
         self.EXPL_NOISE = 0.
         self.EXPL_MIN = 0.
 
+        self.device = 'cuda'
+
     def create_controller(self):
         return DreamerController(self)

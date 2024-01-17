@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from configs.Config import Config
 
 from agent.models.tokenizer import StateEncoderConfig
-from agent.models.transformer import PerAttnConfig, TransformerConfig
+from agent.models.transformer import PerceiverConfig, TransformerConfig
 
 from functools import partial
 
@@ -64,11 +64,11 @@ class DreamerConfig(Config):
         self.IN_DIM = 30
 
         # tokenizer params
-        self.nums_obs_token = 12 # 4
+        self.nums_obs_token = 16 # 4
         self.hidden_sizes = [512, 512]
         self.alpha = 1.0
         self.EMBED_DIM = 128 # 128
-        self.OBS_VOCAB_SIZE = 2048 # 512
+        self.OBS_VOCAB_SIZE = 1024 # 512
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 
@@ -81,15 +81,30 @@ class DreamerConfig(Config):
         self.HORIZON = 20
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
+
+        #### deprecated (original perceiver params)
         self.perattn_HEADS = 4
         self.DROPOUT = 0.1
-        
-        self.perattn_config = PerAttnConfig(
-            query_dim=self.TRANS_EMBED_DIM,
-            context_dim=self.TRANS_EMBED_DIM,
-            heads=self.perattn_HEADS, # self.HEADS
-            dim_head=64,
-            dropout=self.DROPOUT,
+
+        # self.perattn_config = PerAttnConfig(
+        #     query_dim=self.TRANS_EMBED_DIM,
+        #     context_dim=self.TRANS_EMBED_DIM,
+        #     heads=self.perattn_HEADS, # self.HEADS
+        #     dim_head=64,
+        #     dropout=self.DROPOUT,
+        # )
+        #### -------------------------------------
+
+        self.perceiver_config_fn = partial(PerceiverConfig,
+            dim=self.TRANS_EMBED_DIM,
+            latent_dim=self.TRANS_EMBED_DIM,
+            depth=2,
+            cross_heads=1,
+            cross_dim_head=64,
+            latent_heads=8,
+            latent_dim_head=64,
+            attn_dropout=0.,
+            ff_dropout=0.
         )
 
         self.trans_config = TransformerConfig(
@@ -108,8 +123,11 @@ class DreamerConfig(Config):
         # self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
         self.FEAT = self.EMBED_DIM * self.nums_obs_token
         # self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token # self.TRANS_EMBED_DIM
-        self.critic_FEAT = self.TRANS_EMBED_DIM
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
+
+    def update(self):
+        self.encoder_config = self.encoder_config_fn(state_dim=self.IN_DIM)
+        self.perceiver_config = self.perceiver_config_fn(num_latents=self.NUM_AGENTS)
 
 
 @dataclass

@@ -35,6 +35,7 @@ def get_env_info(configs, env):
         config.IN_DIM = env.n_obs
         config.ACTION_SIZE = env.n_actions
         config.NUM_AGENTS = env.n_agents
+        config.update()
     
     print(f'Observation dims: {env.n_obs}')
     print(f'Action dims: {env.n_actions}')
@@ -123,10 +124,10 @@ if __name__ == "__main__":
     wandb.init(
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
-        project="discretized bins",
+        project="mawm_with_h_t",
         group=f"{args.env_name}_MAWM_H{configs['learner_config'].HORIZON}_T{configs['learner_config'].nums_obs_token}_Vocab{configs['learner_config'].OBS_VOCAB_SIZE}",
         # name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
-        name=f'mawm_{args.env_name}_seed{RANDOM_SEED}', # 默认model epochs为200, algo epochs为5, iris initialize, policy on reconstruction
+        name=f'mawm_{args.env_name}_seed{RANDOM_SEED}_test1', # 默认model epochs为200, algo epochs为5, iris initialize, policy on reconstruction
     )
 
     exp = Experiment(steps=args.steps,

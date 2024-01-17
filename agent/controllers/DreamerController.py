@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 from copy import deepcopy
 
 import numpy as np
@@ -17,28 +17,35 @@ class DreamerController:
     def __init__(self, config):
         # self.model = DreamerModel(config).eval()
         # tokenizer
-        self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
-                                   encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
+                                   encoder=StateEncoder(config.encoder_config), decoder=StateDecoder(config.encoder_config)).eval()
         # ---------
 
         # world model (transformer)
-        # self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
-        #                           config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
-        #                           is_continuous=False).eval()
+        self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
+                                  config=config.trans_config, perceiver_config=config.perceiver_config, action_dim=config.ACTION_SIZE,
+                                  is_continuous=False).eval()
         # -------------------------
 
-        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
+        self.actor = Actor(config.IN_DIM + config.TRANS_EMBED_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
         self.expl_decay = config.EXPL_DECAY
         self.expl_noise = config.EXPL_NOISE
         self.expl_min = config.EXPL_MIN
-        self.init_rnns()
+
+        self.n_agents = config.NUM_AGENTS
+        self.max_history_length = config.HORIZON
+
+        self.init_history()
         self.init_buffer()
 
     def receive_params(self, params):
         self.tokenizer.load_state_dict(params['tokenizer'])
-        # self.model.load_state_dict(params['model'])
+        self.model.load_state_dict(params['model'])
         self.actor.load_state_dict(params['actor'])
+
+    def init_history(self):
+        self.history_tokens = deque()
+        self.history_perattn_out = deque()
 
     def init_buffer(self):
         self.buffer = defaultdict(list)
@@ -47,12 +54,18 @@ class DreamerController:
         self.prev_rnn_state = None
         self.prev_actions = None
 
+    def check_history(self):
+        if len(self.history_tokens) >= 2 * self.max_history_length:
+            self.history_tokens.popleft()
+            self.history_tokens.popleft()
+            self.history_perattn_out.popleft()
+
     def dispatch_buffer(self):
         total_buffer = {k: np.asarray(v, dtype=np.float32) for k, v in self.buffer.items()}
         last = np.zeros_like(total_buffer['done'])
         last[-1] = 1.0
         total_buffer['last'] = last
-        self.init_rnns()
+        self.init_history()
         self.init_buffer()
         return total_buffer
 
@@ -70,39 +83,50 @@ class DreamerController:
     #     to CPU, for the sampler.  Advances the recurrent state of the agent.
     #     (no grad)
     #     """
-    #     state = self.model(observations, self.prev_actions, self.prev_rnn_state, nn_mask)
-    #     feats = state.get_features()
+    #     # nn_mask 只有在flatland才用得上
+    #     # obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
+    #     # feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
+
+    #     feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
+    #     # feats = self.tokenizer.encode_decode(observations, True, True)
+
     #     action, pi = self.actor(feats)
+
     #     if avail_actions is not None:
     #         pi[avail_actions == 0] = -1e10
     #         action_dist = OneHotCategorical(logits=pi)
     #         action = action_dist.sample()
 
-    #     self.advance_rnns(state)
     #     self.prev_actions = action.clone()
     #     return action.squeeze(0).clone()
-    
+                
     @torch.no_grad()
     def step(self, observations, avail_actions, nn_mask):
-        """"
-        Compute policy's action distribution from inputs, and sample an
-        action. Calls the model to produce mean, log_std, value estimate, and
-        next recurrent state.  Moves inputs to device and returns outputs back
-        to CPU, for the sampler.  Advances the recurrent state of the agent.
-        (no grad)
-        """
-        # nn_mask 只有在flatland才用得上
-        # obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
-        # feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
-
-        feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
-
+        obs_encodings = self.tokenizer.encode(observations, True)
+        rec_obs = torch.clamp(self.tokenizer.decode(obs_encodings.z_quantized, True), -1., 1.)
+        obs_tokens = rearrange(obs_encodings.tokens, 'b n k -> (b n) k')
+        
+        self.history_tokens.append(obs_tokens)
+        tokens = torch.cat(tuple(self.history_tokens), dim=1)
+        perattn_out = torch.cat(tuple(self.history_perattn_out), dim=1) if len(self.history_perattn_out) > 0 else None
+        outputs_wm = self.model(tokens, perattn_out=perattn_out)
+        trans_feat = outputs_wm.output_sequence[:, -2].detach() # -1
+        feats = torch.cat([rec_obs, trans_feat.unsqueeze(0)], dim=-1)
+        
         action, pi = self.actor(feats)
         if avail_actions is not None:
             pi[avail_actions == 0] = -1e10
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample()
 
+        act_tokens = torch.argmax(action.squeeze(0), dim=-1, keepdim=True)
+
+        complement_perattn_out = self.model.get_perceiver_out(obs_tokens, act_tokens).unsqueeze(1)
+        complement_tokens = torch.cat([torch.zeros(*act_tokens.shape, dtype=torch.long), act_tokens], dim=-1)
+        self.history_tokens.append(complement_tokens)
+        self.history_perattn_out.append(complement_perattn_out)
+
+        self.check_history()
         self.prev_actions = action.clone()
         return action.squeeze(0).clone()
 

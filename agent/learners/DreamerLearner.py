@@ -60,28 +60,25 @@ def initialize_weights(mod, scale=1.0, mode='ortho'):
 class DreamerLearner:
 
     def __init__(self, config):
+        # detect abnormal condition
+        torch.autograd.set_detect_anomaly(True)
+
         self.config = config
         # self.model = DreamerModel(config).to(config.DEVICE).eval()
         # tokenizer
-        self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
-                                   encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
+                                   encoder=StateEncoder(config.encoder_config), decoder=StateDecoder(config.encoder_config)).to(config.DEVICE).eval()
         # ---------
 
         # world model (transformer)
         self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
-                                  config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
+                                  config=config.trans_config, perceiver_config=config.perceiver_config, action_dim=config.ACTION_SIZE,
                                   is_continuous=False).to(config.DEVICE).eval()
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
-
-        # based on latent
-        # self.actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
-        # self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
-
         # based on reconstructed obs
-        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
-        self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
+        self.actor = Actor(config.IN_DIM + config.TRANS_EMBED_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+        self.critic = AugmentedCritic(config.IN_DIM + config.TRANS_EMBED_DIM, config.HIDDEN).to(config.DEVICE)
 
 
         # initialize_weights(self.model, mode='xavier')
@@ -104,12 +101,11 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = False
+        self.tqdm_vis = True
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
         self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
-        # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.config.ACTOR_LR, weight_decay=0.00001)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.config.VALUE_LR)
 
@@ -137,7 +133,7 @@ class DreamerLearner:
         if self.replay_buffer.num_steps < self.config.MIN_BUFFER_SIZE:
             return
 
-        self.accum_samples = 0
+        self.accum_samples = self.accum_samples % self.config.N_SAMPLES
         sys.stdout.flush()
 
         self.train_count += 1
@@ -145,10 +141,9 @@ class DreamerLearner:
         intermediate_losses = defaultdict(float)
         # train tokenzier
         for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
-            samples = self.replay_buffer.sample_batch(batch_num_samples=50,
-                                                      sequence_length=self.replay_buffer.min_episode_length,
-                                                      sample_from_start=True,
-                                                      valid_sample=True)
+            samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.t_bs,
+                                                      sequence_length=1,
+                                                      sample_from_start=True)
             samples = self._to_device(samples)
             loss_dict = self.train_tokenizer(samples)
 
@@ -176,10 +171,9 @@ class DreamerLearner:
         if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 2,
-                                                          sequence_length=10,
-                                                          sample_from_start=False,
-                                                          valid_sample=True)
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.BATCH_SIZE,
+                                                          sequence_length=self.config.SEQ_LENGTH,
+                                                          sample_from_start=False)
                 samples = self._to_device(samples)
                 self.train_agent_with_transformer(samples)
 
@@ -220,16 +214,14 @@ class DreamerLearner:
         self.tokenizer.eval()
         self.model.eval()
 
-        actions, av_actions, old_policy, actor_feat, critic_feat, returns \
-              = trans_actor_rollout(samples['observation'],
-                                    samples['av_action'],
-                                    samples['done'], # samples['last']
+        actions, av_actions, old_policy, feat, returns \
+              = trans_actor_rollout(samples,
                                     self.tokenizer, self.model,
                                     self.actor,
                                     self.critic,
                                     self.config)
         
-        adv = returns.detach() - self.critic(critic_feat).detach()
+        adv = returns.detach() - self.critic(feat).detach()
         if self.config.ENV_TYPE == Env.STARCRAFT:
             adv = advantage(adv)
         wandb.log({'Agent/Returns': returns.mean()})
@@ -239,11 +231,11 @@ class DreamerLearner:
             for i in range(0, len(inds), step):
                 self.cur_update += 1
                 idx = inds[i:i + step]
-                loss = actor_loss(actor_feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
+                loss = actor_loss(feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
                                   old_policy[idx], adv[idx], self.actor, self.entropy)
                 self.apply_optimizer(self.actor_optimizer, self.actor, loss, self.config.GRAD_CLIP_POLICY)
                 self.entropy *= self.config.ENTROPY_ANNEALING
-                val_loss = value_loss(self.critic, critic_feat[idx], returns[idx])
+                val_loss = value_loss(self.critic, feat[idx], returns[idx])
                 if np.random.randint(20) == 9:
                     wandb.log({'Agent/val_loss': val_loss, 'Agent/actor_loss': loss})
                 self.apply_optimizer(self.critic_optimizer, self.critic, val_loss, self.config.GRAD_CLIP_POLICY)
