@@ -72,10 +72,10 @@ def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, cr
 def trans_critic_rollout(critic, critic_feats, imag_rewards, discounts, config):
     with FreezeParameters([critic]):
         imag_rewards = imag_rewards.mean(-2, keepdim=True)[:-1]
-        discounts = discounts[:-1]
+        discounts = discounts[:-1] # 这里discount如果是termination的二元，要先用1取补运算
         value = critic(critic_feats)
         wandb.log({'Value/Max reward': imag_rewards.max(), 'Value/Min reward': imag_rewards.min(),
-                   'Value/Reward': imag_rewards.mean(), 'Value/Discount': discounts.mean(),
+                   'Value/Reward': imag_rewards.mean(), 'Value/Discount': 1 - discounts.clone().to(torch.float32).mean(),
                    'Value/Value': value.mean()})
     
     returns = compute_return(imag_rewards, value[:-1], discounts, bootstrap=value[-1], lmbda=config.DISCOUNT_LAMBDA,

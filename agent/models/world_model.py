@@ -142,6 +142,7 @@ class MAWorldModel(nn.Module):
         # )
 
         self.apply(init_weights)
+        self.use_ib = True # use iris databuffer 
 
     def __repr__(self) -> str:
         return "multi_agent_world_model"
@@ -215,83 +216,40 @@ class MAWorldModel(nn.Module):
 
         outputs = self(tokens, perattn_out = perattn_out)
 
-        '''
-        用于iris版本的databuffer训练
-        ##############################
         # compute labels
-        labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
-        logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
+        if self.use_ib:  # if use iris databuffer
+            valid_mask = batch['filled'].clone().unsqueeze(-1).expand(-1, -1, self.num_agents).to(torch.float32)
 
-        loss_obs = F.cross_entropy(logits_observations, labels_observations)
+            labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
+            logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
 
-        valid_mask = batch['filled'].clone().unsqueeze(-1).expand(-1, -1, self.num_agents).to(torch.float32)
-        # loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
-        pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-        loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+            loss_obs = F.cross_entropy(logits_observations, labels_observations)
 
-        l1_criterion = nn.SmoothL1Loss(reduction="none")
-        loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
-        loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
+            loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t n e -> (b t n) e'), labels_ends)
 
-        # criterion = nn.CrossEntropyLoss(reduction='none')
-        # logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
-        # label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
-        # fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
-        # fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
-        # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
-        info_loss = 0.
+            # pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
+            # loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
 
-        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-        loss_av_actions = -(pred_av_actions.log_prob(batch['av_action']) * valid_mask).sum() / valid_mask.sum()
+            l1_criterion = nn.SmoothL1Loss(reduction="none")
+            loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
+            loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
 
-        loss = loss_obs + loss_rewards + loss_ends + loss_av_actions + info_loss
+            # criterion = nn.CrossEntropyLoss(reduction='none')
+            # logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
+            # label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
+            # fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
+            # fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
+            # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
 
-        loss_dict = {
-            'world_model/loss_obs': loss_obs.item(),
-            'world_model/loss_rewards': loss_rewards.item(),
-            'world_model/loss_ends': loss_ends.item(),
-            'world_model/loss_av_actions': loss_av_actions.item(),
-            'world_model/info_loss': 0.,
-            'world_model/total_loss': loss.item(),
-        }
-        '''
-        
-        '''
-        用于mamba版本的databuffer训练
-        ############################
-        '''
-        # compute labels
-        ipdb.set_trace()
-        labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
-        logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
+            info_loss = 0.
 
-        loss_obs = F.cross_entropy(logits_observations, labels_observations)
+            pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
+            loss_av_actions = -(pred_av_actions.log_prob(batch['av_action'][:, 1:]) * valid_mask[:, 1:]).sum() / valid_mask[:, 1:].sum()
 
-        valid_mask = batch['filled'].clone().unsqueeze(-1).expand(-1, -1, self.num_agents).to(torch.float32)
-        # loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
-        pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-        loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+        else:  # use mamba databuffer
+            pass
 
-        l1_criterion = nn.SmoothL1Loss(reduction="none")
-        loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
-        loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
-
-        # criterion = nn.CrossEntropyLoss(reduction='none')
-        # logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
-        # label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
-        # fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
-        # fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
-        # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
-        info_loss = 0.
-
-        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
-        loss_av_actions = -(pred_av_actions.log_prob(batch['av_action']) * valid_mask).sum() / valid_mask.sum()
-
-        w1 = 2.0
-        w2 = 2.0
-        w3 = 1.0
-
-        loss = loss_obs + loss_rewards + loss_ends + loss_av_actions + info_loss
+        loss = loss_obs + loss_ends + loss_rewards + loss_av_actions + info_loss
 
         loss_dict = {
             'world_model/loss_obs': loss_obs.item(),
@@ -311,9 +269,10 @@ class MAWorldModel(nn.Module):
         labels_observations = rearrange(obs_tokens.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(obs_tokens), -100).transpose(1, 2), 'b n l k -> (b n) (l k)')[:, 1:]
         
         labels_rewards = rewards.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(rewards), 0.)
-        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), 0.) 
+
+        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), -100).to(torch.long)
         
-        return labels_observations.reshape(-1), labels_rewards, labels_ends
+        return labels_observations.reshape(-1), labels_rewards, labels_ends.reshape(-1)
     
     def compute_labels_world_model_n(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
@@ -332,14 +291,11 @@ class MAWorldModel(nn.Module):
         input_encodings = torch.cat([obs_encodings, action_encodings], dim=-2)
 
         n, m, e = input_encodings.shape[-3:]
-        input_encodings = input_encodings.reshape(-1, n, m, e)
+        input_encodings = rearrange(input_encodings, '... n m e -> (...) (n m) e')
+        agent_id_emb = repeat(self.agent_id_pos_emb[:, :n], '1 n e -> b (n m) e', b = input_encodings.size(0), n = n, m = m)
 
-        input_encodings += self.agent_id_pos_emb[:, :n].unsqueeze(-2).expand(input_encodings.size(0), -1, m, -1).clone().detach().to(device)
-        # input_encodings += self.agent_id_pos_emb(torch.arange(n).to(device)).unsqueeze(-2).expand(-1, m, -1)
-        input_encodings = rearrange(input_encodings, 'b n m e -> b (n m) e')
-        perattn_out = self.perattn(self.before_q.unsqueeze(0).expand(input_encodings.size(0), -1, -1), input_encodings)
-        
-        perattn_out = self.bidirectional_attn_encoder(perattn_out)
+        input_encodings += agent_id_emb.detach().to(device)
+        perattn_out = self.perattn(input_encodings)
 
         perattn_out = perattn_out.reshape(*shape[:-1], -1)
         return perattn_out
@@ -355,12 +311,12 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
     dones = []
 
     # initialize wm_env
-    rec_obs, n_critic_feat = wm_env.reset_from_initial_observations(initial_obs)
+    rec_obs, critic_feat = wm_env.reset_from_initial_observations(initial_obs)
 
     av_action = initial_av_action
     for t in range(horizons):
         # feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
-        critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
+        # critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
 
         # action, pi = policy(feat)
         action, pi = policy(rec_obs)
@@ -377,7 +333,7 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
         actions.append(action)
         critic_feats.append(critic_feat)
 
-        rec_obs, reward, done, av_action, n_critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
+        rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
         rewards.append(reward)
         dones.append(done)

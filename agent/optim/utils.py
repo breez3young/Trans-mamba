@@ -46,12 +46,12 @@ def batch_multi_agent(tensor, n_agents):
 
 def compute_return(reward, value, discount, bootstrap, lmbda, gamma):
     next_values = torch.cat([value[1:], bootstrap[None]], 0)
-    target = reward + gamma * discount * next_values * (1 - lmbda)
+    target = reward + gamma * discount.logical_not() * next_values * (1 - lmbda)
     outputs = []
     accumulated_reward = bootstrap
     for t in reversed(range(reward.shape[0])):
         discount_factor = discount[t]
-        accumulated_reward = target[t] + gamma * discount_factor * accumulated_reward * lmbda
+        accumulated_reward = target[t] + gamma * discount_factor.logical_not() * accumulated_reward * lmbda
         outputs.append(accumulated_reward)
     returns = torch.flip(torch.stack(outputs), [0])
     return returns

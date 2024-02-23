@@ -4,4 +4,4 @@ env="starcraft"
 seed=2
 
 
-CUDA_VISIBLE_DEVICES=2 python train.py --n_workers 1 --env ${env} --env_name ${map_name} --seed ${seed} --steps 50000 --mode disabled
+CUDA_VISIBLE_DEVICES=3 python train.py --n_workers 1 --env ${env} --env_name ${map_name} --seed ${seed} --steps 50000 --mode disabled

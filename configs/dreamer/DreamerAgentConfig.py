@@ -82,7 +82,7 @@ class DreamerConfig(Config):
         )
         
         # world model params
-        self.HORIZON = 20
+        self.HORIZON = 15
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
         self.perattn_HEADS = 4
@@ -105,7 +105,7 @@ class DreamerConfig(Config):
             tokens_per_block=self.nums_obs_token + 1 + 1,
             max_blocks=self.HORIZON,
             attention='causal',
-            num_layers=6, # 10
+            num_layers=10, # 10
             num_heads=self.HEADS,
             embed_dim=self.TRANS_EMBED_DIM,
             embed_pdrop=self.DROPOUT,
@@ -116,7 +116,7 @@ class DreamerConfig(Config):
         # 这里修改一下
         # self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
         self.FEAT = self.EMBED_DIM * self.nums_obs_token
-        self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token # self.TRANS_EMBED_DIM
+        self.critic_FEAT = self.TRANS_EMBED_DIM # * self.nums_obs_token # self.TRANS_EMBED_DIM
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
 
 
@@ -135,7 +135,7 @@ class DreamerConfig(Config):
                 tokens_per_block=self.nums_obs_token + 1 + 1,
                 max_blocks=self.HORIZON,
                 attention='causal',
-                num_layers=6, # 10
+                num_layers=10, # 10
                 num_heads=self.HEADS,
                 embed_dim=self.TRANS_EMBED_DIM,
                 embed_pdrop=self.DROPOUT,
@@ -144,7 +144,7 @@ class DreamerConfig(Config):
             )
 
             self.FEAT = self.EMBED_DIM * self.nums_obs_token
-            self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token # self.TRANS_EMBED_DIM
+            self.critic_FEAT = self.TRANS_EMBED_DIM # * self.nums_obs_token # self.TRANS_EMBED_DIM
             self.GLOBAL_FEAT = self.FEAT + self.EMBED
 
 

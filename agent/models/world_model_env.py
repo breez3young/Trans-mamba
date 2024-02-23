@@ -37,8 +37,6 @@ class MAWorldModelEnv:
         self.n_agents = world_model.num_agents
         self.predict_avail_action = True if world_model.action_dim else False
 
-        self.is_continuous = world_model.is_continuous
-
     @property
     def num_observations_tokens(self) -> int:
         return self._num_observations_tokens
@@ -63,7 +61,7 @@ class MAWorldModelEnv:
 
         output_sequence = self.refresh_keys_values_with_initial_obs_tokens(rearrange(obs_tokens, 'b n k -> (b n) k'))
         self.obs_tokens = obs_tokens
-        critic_feat = rearrange(output_sequence[:, -2], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
+        critic_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(output_sequence.size(0) / self.n_agents), n=self.n_agents)
         return self.decode_obs_tokens(), critic_feat
 
     @torch.no_grad()
@@ -102,9 +100,6 @@ class MAWorldModelEnv:
 
         if self.keys_values_wm.size + num_passes > self.world_model.config.max_tokens:
             _ = self.refresh_keys_values_with_initial_obs_tokens(self.obs_tokens)
-        
-        if self.is_continuous:
-            action = action_split_into_bins(action, self.world_model.act_vocab_size)
 
         # perceiver attention output
         perattn_out = self.world_model.get_perceiver_attn_out(self.obs_tokens, action)
@@ -112,7 +107,7 @@ class MAWorldModelEnv:
         # ---------------------------
 
         token = action.clone().detach() if isinstance(action, torch.Tensor) else torch.tensor(action, dtype=torch.long).clone().detach()
-        perattn_placeholder = torch.zeros(*token.shape[:-1], 1, dtype=torch.long, device=token.device)
+        perattn_placeholder = torch.empty(*token.shape[:-1], 1, dtype=torch.long, device=token.device)
         token = torch.cat([perattn_placeholder, token], dim=-1)
 
         token = rearrange(token, 'b n k -> (b n) k').to(self.device)  # (B, N)
@@ -125,9 +120,9 @@ class MAWorldModelEnv:
             if k == 0:
                 reward = outputs_wm.pred_rewards.float()
                 
-                # done = Categorical(logits=outputs_wm.logits_ends).sample().cpu().numpy().astype(bool)  # (B,), numpy
-                pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs_wm.logits_ends), 1)
-                done = pred_ends.mean
+                done = Categorical(logits=outputs_wm.logits_ends).sample().unsqueeze(-1).to(torch.bool)  # (B,), numpy
+                # pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs_wm.logits_ends), 1)
+                # done = pred_ends.mean
 
                 if self.predict_avail_action:
                     avail_action_dist = td.independent.Independent(td.Bernoulli(logits=outputs_wm.pred_avail_action), 1)
@@ -154,7 +149,7 @@ class MAWorldModelEnv:
         avail_action = avail_action.squeeze(1) if avail_action is not None else None
         
         obs = self.decode_obs_tokens() if should_predict_next_obs else None # obs is tensor
-        critic_feat = rearrange(output_sequence[:, -2], '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if should_predict_next_obs else None
+        critic_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if should_predict_next_obs else None
         # share_obs = self.world_model.get_perceiver_attn_out(self.tokenizer.embedding(self.obs_tokens))
         return obs, reward, done, avail_action, critic_feat # o_t+1, r_t
 

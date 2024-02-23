@@ -91,8 +91,8 @@ class DreamerLearner:
         self.old_critic = deepcopy(self.critic)
         
         self.replay_buffer = MultiAgentEpisodesDataset(max_ram_usage="30G", name="train_dataset")
-        # self.replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
-        #                                    config.DEVICE, config.ENV_TYPE)
+        self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
+                                                 config.DEVICE, config.ENV_TYPE)
 
         self.entropy = config.ENTROPY
         self.step_count = -1
@@ -105,7 +105,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = False
+        self.tqdm_vis = True
 
         if self.config.use_bin:
             print('Not using & training tokenizer...')
@@ -131,8 +131,8 @@ class DreamerLearner:
         self.total_samples += len(rollout['action'])
 
         self.add_experience_to_dataset(rollout)
-        # self.replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
-        #                           rollout['fake'], rollout['last'], rollout.get('avail_action'))
+        self.mamba_replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
+                                        rollout['fake'], rollout['last'], rollout.get('avail_action'))
         
         self.step_count += 1
         if self.accum_samples < self.config.N_SAMPLES:
@@ -150,10 +150,9 @@ class DreamerLearner:
         # train tokenzier
         if not self.config.use_bin:
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=50,
-                                                          sequence_length=self.replay_buffer.min_episode_length,
-                                                          sample_from_start=True,
-                                                          valid_sample=True)
+                samples = self.replay_buffer.sample_batch(batch_num_samples=512,
+                                                          sequence_length=1,
+                                                          sample_from_start=True)
                 samples = self._to_device(samples)
                 loss_dict = self.train_tokenizer(samples)
 
@@ -175,10 +174,10 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 26:
+        if self.train_count == 46:
             print('Start training actor & critic...')
 
-        if self.train_count > 25:
+        if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 2,
