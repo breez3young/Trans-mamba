@@ -7,14 +7,15 @@ from typing import Optional
 import math
 import numpy as np
 
-from einops import rearrange
+from torch import einsum
+from einops import rearrange, repeat
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 from .kv_caching import KeysValues, KVCache
 
-
+import ipdb
 
 @dataclass
 class TransformerConfig:
@@ -35,14 +36,19 @@ class TransformerConfig:
         return self.tokens_per_block * self.max_blocks
 
 
-### Perceiver Attention
 @dataclass
-class PerAttnConfig:
-    query_dim: int
-    context_dim: int
-    heads: int
-    dim_head: int
-    dropout: float
+class PerceiverConfig:
+    dim: int
+    latent_dim: int
+    num_latents: int
+    depth: int
+    
+    cross_heads: int
+    cross_dim_head: int
+    latent_heads: int
+    latent_dim_head: int
+    attn_dropout: float
+    ff_dropout: float
 
 
 def get_sinusoid_encoding_table(n_position, d_hid):
@@ -57,62 +63,141 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
 
+
+'''
+Credits to https://github.com/lucidrains/perceiver-pytorch/blob/main/perceiver_pytorch/perceiver_pytorch.py
+'''
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    return val if exists(val) else d
+
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn, context_dim = None):
+        super().__init__()
+        self.fn = fn
+        self.norm = nn.LayerNorm(dim)
+        self.norm_context = nn.LayerNorm(context_dim) if exists(context_dim) else None
+
+    def forward(self, x, **kwargs):
+        x = self.norm(x)
+
+        if exists(self.norm_context):
+            context = kwargs['context']
+            normed_context = self.norm_context(context)
+            kwargs.update(context = normed_context)
+
+        return self.fn(x, **kwargs)
+
+class GEGLU(nn.Module):
+    def forward(self, x):
+        x, gates = x.chunk(2, dim = -1)
+        return x * F.gelu(gates)
+
+## a little modification on GEGLU()
+class FeedForward(nn.Module):
+    def __init__(self, dim, mult = 4, dropout = 0.):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim * mult * 2),
+            GEGLU(),
+            nn.Linear(dim * mult, dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
 class PerAttention(nn.Module):
     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.0) -> None:
         super().__init__()
         inner_dim = dim_head * heads
-        context_dim = context_dim if context_dim is not None else query_dim
+        context_dim = default(context_dim, query_dim)
+
         self.scale = dim_head ** -0.5
         self.heads = heads
 
         self.to_q = nn.Linear(query_dim, inner_dim, bias=True)
         self.to_kv = nn.Linear(context_dim, inner_dim * 2, bias=True)
-        self.to_out = nn.Linear(inner_dim, context_dim)
+        self.to_out = nn.Linear(inner_dim, query_dim)
         
-        self.attend = nn.Softmax(dim = -1)
         self.dropout = nn.Dropout(dropout)
-        self.resid_dropout = nn.Dropout(dropout)
         
-
-    def forward(self, x, context=None):
+    def forward(self, x, context = None, mask = None):
         h = self.heads
-
-        context = context if context is not None else x
-
+        
         q = self.to_q(x)
+        context = default(context, x)
         k, v = self.to_kv(context).chunk(2, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), (q, k, v))
         
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h = h), (q, k, v))
+        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+
+        if exists(mask):
+            mask = rearrange(mask, 'b ... -> b (...)')
+            max_neg_value = -torch.finfo(sim.dtype).max
+            mask = repeat(mask, 'b j -> (b h) () j', h = h)
+            sim.masked_fill_(~mask, max_neg_value)
         
-        attn = self.attend(dots)
+        # attention, what we cannot get enough of
+        attn = sim.softmax(dim = -1)
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
-
-        out = self.resid_dropout(out)
-        out = rearrange(out, 'b h n d -> b n (h d)')
+        out = einsum('b i j, b j d -> b i d', attn, v)
+        out = rearrange(out, '(b h) n d -> b n (h d)', h = h)
         return self.to_out(out)
 
-class PerBlock(nn.Module):
-    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.0) -> None:
+class Perceiver(nn.Module):
+    def __init__(self,
+                 dim,
+                 latent_dim,
+                 num_latents,
+                 depth,
+                 cross_heads = 1,
+                 cross_dim_head = 64,
+                 latent_heads = 8,
+                 latent_dim_head = 64,
+                 attn_dropout = 0.,
+                 ff_dropout = 0.,
+                 ) -> None:
         super().__init__()
-        self.attn = PerAttention(query_dim, context_dim, heads, dim_head, dropout)
-        self.ln1 = nn.LayerNorm(context_dim)
-        self.ln2 = nn.LayerNorm(query_dim)
-        self.mlp = nn.Sequential(
-            nn.Linear(query_dim, 4 * query_dim),
-            nn.GELU(),
-            nn.Linear(4 * query_dim, query_dim),
-            nn.Dropout(dropout),
-        )
-    
-    def forward(self, x, context=None):
-        context = self.ln1(context) if context is not None else None
-        x_attn = self.attn(x, context)
-        x = x + x_attn
-        x = x + self.mlp(self.ln2(x))
+
+        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
+
+        self.cross_attn_blocks = nn.ModuleList([
+            PreNorm(latent_dim, PerAttention(latent_dim, dim, heads = cross_heads, dim_head = cross_dim_head, dropout = attn_dropout), context_dim=dim),
+            PreNorm(latent_dim, FeedForward(latent_dim, dropout = ff_dropout))
+        ])
+
+        self.layers = nn.ModuleList([])
+        
+        for i in range(depth):
+            self.layers.append(nn.ModuleList([
+                PreNorm(latent_dim, PerAttention(latent_dim, heads = latent_heads, dim_head = latent_dim_head, dropout = attn_dropout)),
+                PreNorm(latent_dim, FeedForward(latent_dim, dropout = ff_dropout))
+            ]))
+        
+    def forward(self, data, mask = None):
+        b = data.shape[0]
+        
+        x = repeat(self.latents, 'n d -> b n d', b = b)
+        
+        cross_attn, cross_ff = self.cross_attn_blocks
+
+        # cross attention only happens once for Perceiver IO
+        x = cross_attn(x, context = data, mask = mask) + x
+        x = cross_ff(x) + x
+
+        # layers
+        for self_attn, self_ff in self.layers:
+            x = self_attn(x) + x
+            x = self_ff(x) + x
+
         return x
+'''
+------------------ partition line ----------------------
+'''
 
 
 class Transformer(nn.Module):

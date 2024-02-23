@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
-from einops import rearrange
+from einops import rearrange, repeat
 import dataclasses
 import torch
 import torch.nn as nn
@@ -13,9 +13,12 @@ from torch.distributions import OneHotCategorical
 from .kv_caching import KeysValues
 from .slicer import Embedder, Head, Slicer
 from .tokenizer import Tokenizer
-from .transformer import Transformer, TransformerConfig, PerAttention, PerAttnConfig, get_sinusoid_encoding_table, PerBlock
+
+from .transformer import Transformer, TransformerConfig, get_sinusoid_encoding_table
+from .transformer import Perceiver, PerceiverConfig
+
 from .world_model_env import MAWorldModelEnv
-from utils import init_weights, LossWithIntermediateLosses, action_split_into_bins, discretize_into_bins
+from utils import init_weights, action_split_into_bins, discretize_into_bins
 import wandb
 import ipdb
 
@@ -26,16 +29,14 @@ class MAWorldModelOutput:
     pred_rewards: torch.FloatTensor
     logits_ends: torch.FloatTensor
     pred_avail_action: torch.FloatTensor
-    logits_last_action: torch.FloatTensor
 
 
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
-                 config: TransformerConfig, perattn_config: PerAttnConfig,
-                 action_dim: int, is_continuous: bool = False, use_bin: bool = False, bins: int = 64) -> None:
+                 config: TransformerConfig, perattn_config: PerceiverConfig,
+                 action_dim: int, use_bin: bool = False, bins: int = 64) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
-        self.is_continuous = is_continuous
         self.use_bin = use_bin
         self.bins = bins
 
@@ -44,16 +45,8 @@ class MAWorldModel(nn.Module):
 
         ## perceiver attention
         self.perattn_config = perattn_config
-        self.perattn = PerBlock(**dataclasses.asdict(perattn_config))
-        self.bidirectional_attn_encoder = nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=perattn_config.context_dim, nhead=perattn_config.heads,
-                                                                                           dim_feedforward=perattn_config.context_dim,
-                                                                                           dropout=perattn_config.dropout, activation='gelu',
-                                                                                           batch_first=True, norm_first=True), 2)
-        
-
-        self.before_q = nn.Parameter(torch.randn(num_agents, perattn_config.query_dim))
-
-        self.agent_id_pos_emb = get_sinusoid_encoding_table(30, perattn_config.context_dim)
+        self.perattn = Perceiver(**dataclasses.asdict(perattn_config))
+        self.agent_id_pos_emb = get_sinusoid_encoding_table(30, perattn_config.dim)
         # self.agent_id_pos_emb = nn.Embedding(num_agents, perattn_config.context_dim)
         ## --------------------
 
@@ -63,8 +56,7 @@ class MAWorldModel(nn.Module):
         self.transformer = Transformer(config)
 
         act_tokens_pattern = torch.zeros(config.tokens_per_block)
-        # act_tokens_pattern[-num_action_tokens - 1:-1] = 1
-        act_tokens_pattern[-1] = 1
+        act_tokens_pattern[-num_action_tokens:] = 1
 
         obs_tokens_pattern = torch.zeros(config.tokens_per_block)
         obs_tokens_pattern[:self.num_obs_tokens] = 1
@@ -79,7 +71,7 @@ class MAWorldModel(nn.Module):
 
         ### Perceiver Attention output pattern
         perattn_pattern = torch.zeros(config.tokens_per_block)
-        perattn_pattern[-num_action_tokens - 1:-1] = 1
+        perattn_pattern[-num_action_tokens - 1 : -num_action_tokens] = 1
 
         # self.obs_embeddings_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
         self.perattn_slicer = Slicer(max_blocks=config.max_blocks, block_mask=perattn_pattern)
@@ -120,7 +112,7 @@ class MAWorldModel(nn.Module):
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ELU(),
-                nn.Linear(config.embed_dim, 1),
+                nn.Linear(config.embed_dim, 2), # 这里改成了二元的termination预测
             )
         )
 
@@ -165,7 +157,6 @@ class MAWorldModel(nn.Module):
 
         indices = self.perattn_slicer.compute_slice(num_steps, prev_steps)
         if perattn_out is not None:
-            # indices = self.perattn_slicer.compute_slice(num_steps, prev_steps).detach()
             assert len(indices) != 0
             sequences[:, indices] = perattn_out
         else:
@@ -189,12 +180,13 @@ class MAWorldModel(nn.Module):
         logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
-        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, None)
+        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action)
 
     def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any):
         device = batch['observation'].device
-        if not self.is_continuous:
-            act_tokens = torch.argmax(batch['action'], dim=-1, keepdim=True)
+
+        # only take discrete action space into account
+        act_tokens = torch.argmax(batch['action'], dim=-1, keepdim=True)
 
         ### modified for ablation ###
         if not self.use_bin:
@@ -212,27 +204,64 @@ class MAWorldModel(nn.Module):
 
         b, l, N, M, e = input_encodings.shape
 
-        input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb[:, :self.num_agents].unsqueeze(-2).expand(b * l, -1, M, -1).clone().detach().to(device)
-        # input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) n m e') + self.agent_id_pos_emb(torch.arange(self.num_agents).to(device)).unsqueeze(-2).expand(-1, M, -1)
-        input_encodings = rearrange(input_encodings, 'b n m e -> b (n m) e')
+        agent_id_emb = repeat(self.agent_id_pos_emb[:, :self.num_agents], '1 n e -> (b l) (n m) e', b = b, l = l, m = M)
+        input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) (n m) e') + agent_id_emb.detach().to(device)
 
-        perattn_out = self.perattn(self.before_q.unsqueeze(0).expand(input_encodings.size(0), -1, -1), input_encodings)
-        perattn_out = self.bidirectional_attn_encoder(perattn_out)
-        
-        perattn_out = rearrange(perattn_out, '(b l) n e -> (b n) l e', b=b, l=l, n=N)  ### TODO 不知道这样直接调换dim会不会和transpose有问题
-        
-        if not self.is_continuous:
-            tokens = torch.cat([obs_tokens, torch.zeros(b, l, N, 1, dtype=torch.long).to(device), act_tokens], dim=-1)
-        else:
-            act_tokens = action_split_into_bins(batch['joint_actions'], self.act_vocab_size) if 'joint_actions' in batch else action_split_into_bins(batch['action'], self.act_vocab_size)
-            tokens = torch.cat([obs_tokens, torch.zeros(b, l, N, 1, dtype=torch.long).to(device), act_tokens], dim=-1)
+        perattn_out = self.perattn(input_encodings)
+        perattn_out = rearrange(perattn_out, '(b l) n e -> (b n) l e', b=b, l=l, n=N)
 
-        ### 生成perattn的占位符
-        # tokens = torch.cat([tokens, torch.zeros(b, l, N, 1, dtype=torch.long).clone().detach().to(device)], dim=-1)  # 用于对perceiver attention output的占位
+        tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1) # (B, L, (K+N))
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
-        outputs = self(tokens, perattn_out)
 
+        outputs = self(tokens, perattn_out = perattn_out)
+
+        '''
+        用于iris版本的databuffer训练
+        ##############################
         # compute labels
+        labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
+        logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
+
+        loss_obs = F.cross_entropy(logits_observations, labels_observations)
+
+        valid_mask = batch['filled'].clone().unsqueeze(-1).expand(-1, -1, self.num_agents).to(torch.float32)
+        # loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
+        pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
+        loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+
+        l1_criterion = nn.SmoothL1Loss(reduction="none")
+        loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
+        loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
+
+        # criterion = nn.CrossEntropyLoss(reduction='none')
+        # logits_last_action = rearrange(outputs.logits_last_action[:, 1:], 'b l n a -> (b l n) a')
+        # label_last_action = rearrange(batch['action'][:, :-1], 'b l n a -> (b l n) a')
+        # fake = batch['filled'].unsqueeze(-1).expand(-1, -1, self.num_agents)
+        # fake = rearrange(fake[:, :-1], 'b l n -> (b l n)')
+        # info_loss = (criterion(logits_last_action, label_last_action.argmax(-1).view(-1)) * fake).mean()
+        info_loss = 0.
+
+        pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action), 1)
+        loss_av_actions = -(pred_av_actions.log_prob(batch['av_action']) * valid_mask).sum() / valid_mask.sum()
+
+        loss = loss_obs + loss_rewards + loss_ends + loss_av_actions + info_loss
+
+        loss_dict = {
+            'world_model/loss_obs': loss_obs.item(),
+            'world_model/loss_rewards': loss_rewards.item(),
+            'world_model/loss_ends': loss_ends.item(),
+            'world_model/loss_av_actions': loss_av_actions.item(),
+            'world_model/info_loss': 0.,
+            'world_model/total_loss': loss.item(),
+        }
+        '''
+        
+        '''
+        用于mamba版本的databuffer训练
+        ############################
+        '''
+        # compute labels
+        ipdb.set_trace()
         labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['reward'], batch['done'], batch['filled'])
         logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b l o -> (b l) o')
 

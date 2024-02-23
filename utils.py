@@ -24,8 +24,8 @@ def configure_optimizer(model, learning_rate, weight_decay, *blacklist_module_na
     blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
-            if pn == 'before_q':
-                decay.add(pn) # 原来是no_decay
+            if pn == "perattn.latents":
+                no_decay.add(pn)
             
             fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
             if any([fpn.startswith(module_name) for module_name in blacklist_module_names]):
@@ -147,8 +147,8 @@ def mse_loss(e):
 ## discretize
 @torch.no_grad()
 def discretize_into_bins(obs, bins: int):
-    eps = 1e-10
-    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=obs.device, dtype=torch.float64)
+    eps = 1e-6
+    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=obs.device, dtype=torch.float32)
     obs_tokens = torch.bucketize(obs, boundaries) - 1
     return obs_tokens.to(obs.device)
 
@@ -161,7 +161,7 @@ def bins2continuous(obs_tokens, bins: int):
     
 def action_split_into_bins(actions, bins: int):
     # assume space of actions should be Box(-1, 1)
-    eps = 1e-10
-    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=actions.device, dtype=torch.float64)
+    eps = 1e-6
+    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=actions.device, dtype=torch.float32)
     bucketized_act = torch.bucketize(actions.contiguous(), boundaries) - 1
     return bucketized_act.to(actions.device)

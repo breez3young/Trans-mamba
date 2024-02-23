@@ -62,7 +62,7 @@ class DreamerLearner:
     def __init__(self, config):
         self.config = config
         self.config.update()
-        # self.model = DreamerModel(config).to(config.DEVICE).eval()
+
         # tokenizer
         self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
@@ -71,10 +71,10 @@ class DreamerLearner:
 
         # world model (transformer)
         obs_vocab_size = config.bins if config.use_bin else config.OBS_VOCAB_SIZE
+        perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
         self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
-                                  config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
-                                  is_continuous=False, use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
-        # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
+                                  config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
+                                  use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
         # -------------------------
 
         # based on latent
@@ -86,7 +86,6 @@ class DreamerLearner:
         self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
 
 
-        # initialize_weights(self.model, mode='xavier')
         initialize_weights(self.actor)
         initialize_weights(self.critic, mode='xavier')
         self.old_critic = deepcopy(self.critic)
@@ -107,6 +106,9 @@ class DreamerLearner:
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
         self.tqdm_vis = False
+
+        if self.config.use_bin:
+            print('Not using & training tokenizer...')
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -149,21 +151,19 @@ class DreamerLearner:
         if not self.config.use_bin:
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=50,
-                                                        sequence_length=self.replay_buffer.min_episode_length,
-                                                        sample_from_start=True,
-                                                        valid_sample=True)
+                                                          sequence_length=self.replay_buffer.min_episode_length,
+                                                          sample_from_start=True,
+                                                          valid_sample=True)
                 samples = self._to_device(samples)
                 loss_dict = self.train_tokenizer(samples)
 
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
-        else:
-            if self.train_count == 1:
-                print('Not using & training tokenizer...')
 
-        if self.train_count == 6:
+        if self.train_count == 21:
             print('Start training world model...')
-        if self.train_count > 5:
+
+        if self.train_count > 20:
             # train transformer-based world model
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
@@ -177,6 +177,7 @@ class DreamerLearner:
 
         if self.train_count == 26:
             print('Start training actor & critic...')
+
         if self.train_count > 25:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
@@ -189,16 +190,6 @@ class DreamerLearner:
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         self.cur_wandb_epoch += 1
-        ### original code
-        # for i in range(self.config.MODEL_EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.MODEL_BATCH_SIZE)
-        #     self.train_model(samples)
-
-        
-
-        # for i in range(self.config.EPOCHS):
-        #     samples = self.replay_buffer.sample(self.config.BATCH_SIZE)
-        #     self.train_agent(samples)
     
     def train_tokenizer(self, samples):
         self.tokenizer.train()
@@ -213,13 +204,6 @@ class DreamerLearner:
         self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm) # or GRAD_CLIP
         self.model.eval()
         return loss_dict
-
-    # def train_model(self, samples):
-    #     self.model.train()
-    #     loss = model_loss(self.config, self.model, samples['observation'], samples['action'], samples['av_action'],
-    #                       samples['reward'], samples['done'], samples['fake'], samples['last'])
-    #     self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.GRAD_CLIP)
-    #     self.model.eval()
 
     def train_agent_with_transformer(self, samples):
         self.tokenizer.eval()

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from configs.Config import Config
 
 from agent.models.tokenizer import StateEncoderConfig
-from agent.models.transformer import PerAttnConfig, TransformerConfig
+from agent.models.transformer import PerceiverConfig, TransformerConfig
 
 from functools import partial
 
@@ -65,7 +65,7 @@ class DreamerConfig(Config):
 
         ## discretize params
         self.use_bin = True
-        self.bins = 256
+        self.bins = 512
 
         # tokenizer params
         self.nums_obs_token = 12 # 4
@@ -88,12 +88,17 @@ class DreamerConfig(Config):
         self.perattn_HEADS = 4
         self.DROPOUT = 0.1
         
-        self.perattn_config = PerAttnConfig(
-            query_dim=self.TRANS_EMBED_DIM,
-            context_dim=self.TRANS_EMBED_DIM,
-            heads=self.perattn_HEADS, # self.HEADS
-            dim_head=64,
-            dropout=self.DROPOUT,
+        # lack "num_latents" which should be equal to NUM_AGENTS
+        self.perattn_config = partial(PerceiverConfig,
+            dim=self.TRANS_EMBED_DIM,
+            latent_dim=self.TRANS_EMBED_DIM,
+            depth=2,
+            cross_heads=8, # 1
+            cross_dim_head=64,
+            latent_heads=8,
+            latent_dim_head=64,
+            attn_dropout=0.,
+            ff_dropout=0.
         )
 
         self.trans_config = TransformerConfig(
