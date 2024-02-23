@@ -15,10 +15,7 @@ class Actor(nn.Module):
     def forward(self, state_features):
         x = self.feedforward_model(state_features)
         action_dist = OneHotCategorical(logits=x)
-
-        # probs
-        probs = F.softmax(x, dim=-1)
-        action = action_dist.sample() + probs - probs.detach()
+        action = action_dist.sample()
         return action, x
 
 

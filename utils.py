@@ -142,3 +142,26 @@ def huber_loss(e, d):
 
 def mse_loss(e):
     return e**2/2
+
+## 以下两个函数都默认源域是[-1., 1.]
+## discretize
+@torch.no_grad()
+def discretize_into_bins(obs, bins: int):
+    eps = 1e-10
+    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=obs.device, dtype=torch.float64)
+    obs_tokens = torch.bucketize(obs, boundaries) - 1
+    return obs_tokens.to(obs.device)
+
+@torch.no_grad()
+def bins2continuous(obs_tokens, bins: int):
+    boundaries = torch.linspace(-1, 1, bins + 1, device=obs_tokens.device, dtype=torch.float32)
+    numerical_map = (boundaries[:-1] + boundaries[1:]) / 2
+    return numerical_map[obs_tokens]
+    
+    
+def action_split_into_bins(actions, bins: int):
+    # assume space of actions should be Box(-1, 1)
+    eps = 1e-10
+    boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=actions.device, dtype=torch.float64)
+    bucketized_act = torch.bucketize(actions.contiguous(), boundaries) - 1
+    return bucketized_act.to(actions.device)

@@ -20,6 +20,7 @@ class EpisodesDataset:
         self.num_seen_episodes = 0
         self.episodes = deque()
         self.visit_entries = deque()
+        self.min_episode_length = 20
 
         self.sample_temperature = 20.
 
@@ -65,6 +66,8 @@ class EpisodesDataset:
         self.episode_id_to_queue_idx[episode_id] = len(self.episodes)
         self.episodes.append(episode) # 队尾存入episode
         self.visit_entries.append(0.)
+        if len(episode) < self.min_episode_length:
+            self.min_episode_length = len(episode)
 
         self.num_seen_episodes += 1
         self.newly_modified_episodes.add(episode_id)

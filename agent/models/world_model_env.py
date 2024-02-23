@@ -10,7 +10,7 @@ import torch.distributions as td
 from torch.distributions.categorical import Categorical
 import torchvision
 
-from utils import action_split_into_bins
+from utils import action_split_into_bins, discretize_into_bins, bins2continuous
 
 import ipdb
 
@@ -20,7 +20,13 @@ class MAWorldModelEnv:
     def __init__(self, tokenizer: torch.nn.Module, world_model: torch.nn.Module, device: Union[str, torch.device], env_name: str, env: Optional[gym.Env] = None) -> None:
         self.device = torch.device(device)
         self.world_model = world_model.to(self.device).eval()
-        self.tokenizer = tokenizer.to(self.device).eval()
+
+        ####
+        self.use_bin = self.world_model.use_bin
+        self.bins = self.world_model.bins
+        ####
+
+        self.tokenizer = tokenizer.to(self.device).eval() if not self.use_bin else None
 
         self.keys_values_wm, self.obs_tokens, self._num_observations_tokens = None, None, None
 
@@ -46,7 +52,11 @@ class MAWorldModelEnv:
 
     @torch.no_grad()
     def reset_from_initial_observations(self, observations: torch.FloatTensor) -> torch.FloatTensor:
-        obs_tokens = self.tokenizer.encode(observations, should_preprocess=True).tokens    # (B, N, Obs_dim) -> (B, N, K)
+        if self.use_bin:
+            obs_tokens = discretize_into_bins(observations, self.bins)
+        else:
+            obs_tokens = self.tokenizer.encode(observations, should_preprocess=True).tokens    # (B, N, Obs_dim) -> (B, N, K)
+
         num_observations_tokens = obs_tokens.shape[-1]
         if self.num_observations_tokens is None:
             self._num_observations_tokens = num_observations_tokens
@@ -159,15 +169,18 @@ class MAWorldModelEnv:
     def decode_obs_tokens(self):
         # assert self.obs_tokens.shape[0] % self.n_agents == 0
         # bs = self.obs_tokens.shape[0]
-        embedded_tokens = self.tokenizer.embedding(self.obs_tokens)     # (B, K, E)
-        rec = self.tokenizer.decode(embedded_tokens, should_postprocess=True)
-        # rec = rearrange(rec, '(b n) o -> b n o', b=int(bs / self.n_agents), n=self.n_agents)
-        if self.env_name == "sc2":
-            return torch.clamp(rec, -1, 1)
-        elif self.env_name == "maniskill2":
-            return rec
+        if not self.use_bin:
+            embedded_tokens = self.tokenizer.embedding(self.obs_tokens)     # (B, K, E)
+            rec = self.tokenizer.decode(embedded_tokens, should_postprocess=True)
+            # rec = rearrange(rec, '(b n) o -> b n o', b=int(bs / self.n_agents), n=self.n_agents)
+            if self.env_name == "sc2":
+                return torch.clamp(rec, -1, 1)
+            elif self.env_name == "maniskill2":
+                return rec
+            else:
+                raise ValueError(f'Unsupported env {self.env_name}')
         else:
-            raise ValueError(f'Unsupported env {self.env_name}')
+            return bins2continuous(self.obs_tokens, self.bins)
 
     ## unmodified
     @torch.no_grad()

@@ -61,6 +61,7 @@ class DreamerLearner:
 
     def __init__(self, config):
         self.config = config
+        self.config.update()
         # self.model = DreamerModel(config).to(config.DEVICE).eval()
         # tokenizer
         self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
@@ -69,9 +70,10 @@ class DreamerLearner:
         # ---------
 
         # world model (transformer)
-        self.model = MAWorldModel(obs_vocab_size=config.OBS_VOCAB_SIZE, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
+        obs_vocab_size = config.bins if config.use_bin else config.OBS_VOCAB_SIZE
+        self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
-                                  is_continuous=False).to(config.DEVICE).eval()
+                                  is_continuous=False, use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
         # self.model = torch.nn.parallel.DistributedDataParallel(self.model).eval()
         # -------------------------
 
@@ -81,7 +83,7 @@ class DreamerLearner:
 
         # based on reconstructed obs
         self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
-        self.critic = AugmentedCritic(config.IN_DIM, config.HIDDEN).to(config.DEVICE)
+        self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
 
 
         # initialize_weights(self.model, mode='xavier')
@@ -104,7 +106,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = True
+        self.tqdm_vis = False
 
     def init_optimizers(self):
         self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -144,19 +146,24 @@ class DreamerLearner:
 
         intermediate_losses = defaultdict(float)
         # train tokenzier
-        for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
-            samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.t_bs,
-                                                      sequence_length=1,
-                                                      sample_from_start=True)
-            samples = self._to_device(samples)
-            loss_dict = self.train_tokenizer(samples)
+        if not self.config.use_bin:
+            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
+                samples = self.replay_buffer.sample_batch(batch_num_samples=50,
+                                                        sequence_length=self.replay_buffer.min_episode_length,
+                                                        sample_from_start=True,
+                                                        valid_sample=True)
+                samples = self._to_device(samples)
+                loss_dict = self.train_tokenizer(samples)
 
-            for loss_name, loss_value in loss_dict.items():
-                intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
+                for loss_name, loss_value in loss_dict.items():
+                    intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
+        else:
+            if self.train_count == 1:
+                print('Not using & training tokenizer...')
 
-        if self.train_count == 21:
+        if self.train_count == 6:
             print('Start training world model...')
-        if self.train_count > 20:
+        if self.train_count > 5:
             # train transformer-based world model
             for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
@@ -168,9 +175,9 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 46:
+        if self.train_count == 26:
             print('Start training actor & critic...')
-        if self.train_count > 45:
+        if self.train_count > 25:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 2,

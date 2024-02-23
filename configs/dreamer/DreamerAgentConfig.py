@@ -63,12 +63,16 @@ class DreamerConfig(Config):
         self.DISCOUNT_LAMBDA = 0.95
         self.IN_DIM = 30
 
+        ## discretize params
+        self.use_bin = True
+        self.bins = 256
+
         # tokenizer params
         self.nums_obs_token = 12 # 4
-        self.hidden_sizes = [256, 256, 256]
+        self.hidden_sizes = [512, 512]
         self.alpha = 1.0
         self.EMBED_DIM = 128 # 128
-        self.OBS_VOCAB_SIZE = 128 # 512
+        self.OBS_VOCAB_SIZE = 512 # 512
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 
@@ -96,7 +100,7 @@ class DreamerConfig(Config):
             tokens_per_block=self.nums_obs_token + 1 + 1,
             max_blocks=self.HORIZON,
             attention='causal',
-            num_layers=10, # 10
+            num_layers=6, # 10
             num_heads=self.HEADS,
             embed_dim=self.TRANS_EMBED_DIM,
             embed_pdrop=self.DROPOUT,
@@ -107,8 +111,37 @@ class DreamerConfig(Config):
         # 这里修改一下
         # self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
         self.FEAT = self.EMBED_DIM * self.nums_obs_token
-        self.critic_FEAT = self.TRANS_EMBED_DIM # self.TRANS_EMBED_DIM * self.nums_obs_token
+        self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token # self.TRANS_EMBED_DIM
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
+
+
+    def update(self):
+        if self.use_bin:
+            self.nums_obs_token = self.IN_DIM
+            
+            self.encoder_config_fn = partial(StateEncoderConfig,
+                nums_obs_token=self.nums_obs_token, 
+                hidden_sizes=self.hidden_sizes,
+                alpha=1.0,
+                z_channels=self.EMBED_DIM * self.nums_obs_token
+            )
+
+            self.trans_config = TransformerConfig(
+                tokens_per_block=self.nums_obs_token + 1 + 1,
+                max_blocks=self.HORIZON,
+                attention='causal',
+                num_layers=6, # 10
+                num_heads=self.HEADS,
+                embed_dim=self.TRANS_EMBED_DIM,
+                embed_pdrop=self.DROPOUT,
+                resid_pdrop=self.DROPOUT,
+                attn_pdrop=self.DROPOUT,
+            )
+
+            self.FEAT = self.EMBED_DIM * self.nums_obs_token
+            self.critic_FEAT = self.TRANS_EMBED_DIM * self.nums_obs_token # self.TRANS_EMBED_DIM
+            self.GLOBAL_FEAT = self.FEAT + self.EMBED
+
 
 
 @dataclass

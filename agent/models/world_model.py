@@ -15,7 +15,7 @@ from .slicer import Embedder, Head, Slicer
 from .tokenizer import Tokenizer
 from .transformer import Transformer, TransformerConfig, PerAttention, PerAttnConfig, get_sinusoid_encoding_table, PerBlock
 from .world_model_env import MAWorldModelEnv
-from utils import init_weights, LossWithIntermediateLosses, action_split_into_bins
+from utils import init_weights, LossWithIntermediateLosses, action_split_into_bins, discretize_into_bins
 import wandb
 import ipdb
 
@@ -32,10 +32,12 @@ class MAWorldModelOutput:
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
                  config: TransformerConfig, perattn_config: PerAttnConfig,
-                 action_dim: int, is_continuous: bool = False) -> None:
+                 action_dim: int, is_continuous: bool = False, use_bin: bool = False, bins: int = 64) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.is_continuous = is_continuous
+        self.use_bin = use_bin
+        self.bins = bins
 
         self.config = config
         self.num_agents = num_agents
@@ -194,9 +196,14 @@ class MAWorldModel(nn.Module):
         if not self.is_continuous:
             act_tokens = torch.argmax(batch['action'], dim=-1, keepdim=True)
 
-        with torch.no_grad():
-            tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
-            obs_tokens = tokenizer_encodings.tokens
+        ### modified for ablation ###
+        if not self.use_bin:
+            with torch.no_grad():
+                tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
+                obs_tokens = tokenizer_encodings.tokens
+        else:
+            obs_tokens = discretize_into_bins(batch['observation'], self.bins)
+        ### --------------------- ###
 
         ### 将obs encodings和action encodings一起过perceiver attention
         obs_encodings = self.embedder.embedding_tables[1](obs_tokens)
@@ -323,7 +330,7 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
 
     av_action = initial_av_action
     for t in range(horizons):
-        feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
+        # feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
         critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
 
         # action, pi = policy(feat)
@@ -339,7 +346,7 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
         actor_feats.append(rec_obs)
         policies.append(pi)
         actions.append(action)
-        critic_feats.append(rec_obs)
+        critic_feats.append(critic_feat)
 
         rec_obs, reward, done, av_action, n_critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         

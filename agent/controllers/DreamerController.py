@@ -10,6 +10,7 @@ from agent.models.DreamerModel import DreamerModel
 from agent.models.world_model import MAWorldModel
 from agent.models.tokenizer import StateEncoder, StateDecoder, Tokenizer
 from networks.dreamer.action import Actor
+from utils import discretize_into_bins, bins2continuous
 
 
 class DreamerController:
@@ -17,6 +18,7 @@ class DreamerController:
     def __init__(self, config):
         # self.model = DreamerModel(config).eval()
         # tokenizer
+        config.update()
         self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
                                    encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
@@ -34,6 +36,9 @@ class DreamerController:
         self.expl_min = config.EXPL_MIN
         self.init_rnns()
         self.init_buffer()
+
+        self.use_bin = config.use_bin
+        self.bins = config.bins
 
     def receive_params(self, params):
         self.tokenizer.load_state_dict(params['tokenizer'])
@@ -94,8 +99,11 @@ class DreamerController:
         # nn_mask 只有在flatland才用得上
         # obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
         # feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
-
-        feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
+        if not self.use_bin:
+            feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
+        else:
+            tokens = discretize_into_bins(observations, self.bins)
+            feats = bins2continuous(tokens, self.bins)
 
         action, pi = self.actor(feats)
         if avail_actions is not None:
