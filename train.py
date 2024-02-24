@@ -124,7 +124,7 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="discretized bins",
-        group=f'{args.env_name}_H{configs["learner_config"].HORIZON}_X{configs["learner_config"].bins}_ib',
+        group=f'{args.env_name}_H{configs["learner_config"].HORIZON}_X{configs["learner_config"].bins}_ib_discount',
         # name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
     )
