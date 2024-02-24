@@ -112,7 +112,7 @@ class MAWorldModel(nn.Module):
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ELU(),
-                nn.Linear(config.embed_dim, 2), # 这里改成了二元的termination预测
+                nn.Linear(config.embed_dim, 1), # 这里改成了二元的termination预测
             )
         )
 
