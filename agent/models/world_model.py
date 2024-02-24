@@ -225,10 +225,8 @@ class MAWorldModel(nn.Module):
 
             loss_obs = F.cross_entropy(logits_observations, labels_observations)
 
-            loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t n e -> (b t n) e'), labels_ends)
-
-            # pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-            # loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+            pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
+            loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
 
             l1_criterion = nn.SmoothL1Loss(reduction="none")
             loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
@@ -270,9 +268,9 @@ class MAWorldModel(nn.Module):
         
         labels_rewards = rewards.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(rewards), 0.)
 
-        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), -100).to(torch.long)
+        labels_ends = ends.masked_fill(mask_fill.unsqueeze(-1).unsqueeze(-1).expand_as(ends), 1.).to(torch.long)
         
-        return labels_observations.reshape(-1), labels_rewards, labels_ends.reshape(-1)
+        return labels_observations.reshape(-1), labels_rewards, labels_ends
     
     def compute_labels_world_model_n(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
