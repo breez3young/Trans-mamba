@@ -116,8 +116,8 @@ class DreamerConfig(Config):
         )
 
         # 这里修改一下
-        # self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
-        self.FEAT = self.EMBED_DIM * self.nums_obs_token
+        self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
+        # self.FEAT = self.EMBED_DIM * self.nums_obs_token
         self.critic_FEAT = self.TRANS_EMBED_DIM # * self.nums_obs_token # self.TRANS_EMBED_DIM
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
 

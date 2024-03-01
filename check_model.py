@@ -149,6 +149,8 @@ if __name__ == "__main__":
         obs = _wrap(next_obs)
         done = all([v for k, v in done.items()])
         
+    env.close()
+        
     print(f"Sampled a {len(observations)}-long traj")
     
     sample = {

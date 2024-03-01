@@ -283,7 +283,7 @@ def _compute_mawm_errors(model, sample, horizons):
 
     r_errors = (pred_r.squeeze() - gt_r).abs().mean()
     
-    mean_dis = pred_dis.mean(0)
+    mean_dis = pred_dis.mean(0).squeeze()
     
     return {
         "obs_l1_errors": obs_l1_errors.item(),
@@ -291,28 +291,80 @@ def _compute_mawm_errors(model, sample, horizons):
         "r_errors": r_errors.item(),
         "mean_discount": mean_dis,
     }
-    
+
+from configs.dreamer.DreamerAgentConfig import RSSMState
+
+def stack_states(rssm_states: list, dim):
+    return reduce_states(rssm_states, dim, torch.stack)
+
+
+def cat_states(rssm_states: list, dim):
+    return reduce_states(rssm_states, dim, torch.cat)
+
+
+def reduce_states(rssm_states: list, dim, func):
+    return RSSMState(*[func([getattr(state, key) for state in rssm_states], dim=dim)
+                       for key in rssm_states[0].__dict__.keys()])
+
 @torch.no_grad()
-def _compute_mamba_errors(model, sample, horizons):
+def _compute_mamba_errors(model_dict, sample, horizons):
+    import ipdb
+    from networks.dreamer.rnns import rollout_representation
+    from agent.optim.loss import calculate_next_reward
+    
+    model = model_dict["model"]
+    
     gt_obs = sample["observations"]
     gt_actions = sample["actions"]
     gt_av_actions = sample["av_actions"]
     gt_r = sample["rewards"]
+    last = sample["last"]
     
-    pred_obs = []
-    pred_r = []
+    n_agents = gt_obs.shape[1]
+    
     pred_av_actions = []
-    pred_dis = []
     
-    init_obs = gt_obs[0].unsqueeze(0)
+    embed = model.observation_encoder(gt_obs.reshape(-1, n_agents, gt_obs.shape[-1]))
+    embed = embed.reshape(gt_obs.shape[0], 1, n_agents, -1)
+    prev_state = model.representation.initial_state(1, n_agents, device=gt_obs.device)
+    prior, post, _ = rollout_representation(model.representation, gt_obs.shape[0], embed, gt_actions[:-1].unsqueeze(1), prev_state, last.unsqueeze(-1).unsqueeze(1))
     
-    embed = model.observation_encoder(init_obs.reshape(-1, n_agents, obs.shape[-1]))
-    embed = embed.reshape(init_obs.shape[0], init_obs.shape[1], n_agents, -1)
-    prev_state = model.representation.initial_state(init_obs.shape[1], init_obs.shape[2], device=obs.device)
-    prior, post, _ = rollout_representation(model.representation, obs.shape[0], embed, gt_actions, prev_state, last)
+    post.stoch = post.stoch[0]
+    post.deter = post.deter[0]
+    post.logits = post.logits[0]
+    state = post.map(lambda x: x.reshape(1, n_agents, -1))
     
+    next_states = []
+    tmp_next_states = []
+    for t in range(horizons):
+        next_states.append(state)
+        tmp_next_states.append(state)
+        state = model.transition(gt_actions[t + 1].unsqueeze(0), state)
     
+    tmp_next_states.append(state)
+    tmp_imag_states = cat_states(tmp_next_states, dim=0)
+    tmp_imag_rew_feat = torch.cat([tmp_imag_states.stoch[:-1], tmp_imag_states.deter[1:]], -1)
     
+    imag_states = cat_states(next_states, dim=0)
+    imag_feat = imag_states.get_features()
+    
+    pred_r = calculate_next_reward(model, gt_actions[1:], imag_states)
+    pred_obs = model.observation_decoder(imag_feat)[0]
+    pred_dis = model.pcont(tmp_imag_rew_feat).mean
+    
+    obs_l1_errors = (pred_obs - gt_obs).abs().sum(-1).mean()
+    obs_l2_errors = (pred_obs - gt_obs).pow(2).sum(-1).mean()
+
+    r_errors = (pred_r.squeeze() - gt_r).abs().mean()
+    
+    mean_dis = pred_dis.mean(0).squeeze()
+    
+    return {
+        "obs_l1_errors": obs_l1_errors.item(),
+        "obs_l2_errors": obs_l2_errors.item(),
+        "r_errors": r_errors.item(),
+        "mean_discount": mean_dis,
+    }
 
 def compute_compounding_errors(models, sample, horizons):
     test_times = 10
@@ -325,37 +377,66 @@ def compute_compounding_errors(models, sample, horizons):
             mamba_m = m
     
     length = sample["observations"].shape[0]
-    pbar = tqdm(range(test_times))
-        
-    c_errors = defaultdict(list)
     
-    for _ in pbar:
-        start = np.random.randint(0, length - horizons)
+    c_mawm_errors = defaultdict(list)
+    c_mamba_errors = defaultdict(list)
+    
+    for idx in range(test_times):
+        print(f"--------------- Evaluation {idx}th time --------------")
+        
+        start = np.random.randint(1, length - horizons)
         end = start + horizons
-        splitted_sample = {k: v[start:end] for k, v in sample.items()}
         
-        if "tokenizer" in m:
-            print(f"Testing mawm...")
-            error_dict = _compute_mawm_errors(m, splitted_sample, horizons)
-        else:
-            error_dict = _compute_mamba_errors(m, splitted_sample, horizons)
+        if mawm_m is not None:
+            splitted_sample = {k: v[start:end] for k, v in sample.items()}
+            error_dict = _compute_mawm_errors(mawm_m, splitted_sample, horizons)
+
+            print(
+                "Evaluating mawm - "
+                + f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
+                + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
+                + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
+                + f"agent_aver_dis: {[round(v, 4) for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {False if end != length else True}"
+            )
             
-        pbar.set_description(
-            f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
-            + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
-            + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
-            + f"agent_aver_dis: {error_dict['mean_discount'].tolist()} | gt_ends?: {False if end != length else True}"
-        )
+            for k, v in error_dict.items():
+                c_mawm_errors[k].append(v)
         
-        for k, v in error_dict.items():
-            c_errors[k].append(v)
-    
-    import ipdb
-    ipdb.set_trace()
+        if mamba_m is not None:
+            splitted_sample = {
+                "observations": sample["observations"][start:end],
+                "actions": sample["actions"][start - 1 : end],
+                "rewards": sample["rewards"][start:end],
+                "av_actions": sample["av_actions"][start:end],
+                "last": torch.zeros_like(sample["rewards"][start:end], device=sample["observations"].device)
+            }
+            
+            error_dict = _compute_mamba_errors(mamba_m, splitted_sample, horizons)
+            
+            print(
+                "Evaluating mamba - "
+                + f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
+                + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
+                + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
+                + f"agent_aver_dis: {[round(v, 4) for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {False if end != length else True}"
+            )
+        
+            for k, v in error_dict.items():
+                c_mamba_errors[k].append(v)
+
+        print()
+        
     print(
-        f"Average {test_times} evaluations:"
-        + f"obs_l1_errors: {np.mean(c_errors['obs_l1_errors']):.4f} | "
-        + f"obs_l2_errors: {np.mean(c_errors['obs_l2_errors']):.4f} | "
-        + f"rew_l1_errors: {np.mean(c_errors['r_errors']):.4f}"
+        f"Average {test_times} evaluations for MAWM: "
+        + f"obs_l1_errors: {np.mean(c_mawm_errors['obs_l1_errors']):.4f} | "
+        + f"obs_l2_errors: {np.mean(c_mawm_errors['obs_l2_errors']):.4f} | "
+        + f"rew_l1_errors: {np.mean(c_mawm_errors['r_errors']):.4f}"
+    )
+    
+    print(
+        f"Average {test_times} evaluations for MAMBA: "
+        + f"obs_l1_errors: {np.mean(c_mamba_errors['obs_l1_errors']):.4f} | "
+        + f"obs_l2_errors: {np.mean(c_mamba_errors['obs_l2_errors']):.4f} | "
+        + f"rew_l1_errors: {np.mean(c_mamba_errors['r_errors']):.4f}"
     )
     

@@ -102,7 +102,7 @@ if __name__ == "__main__":
     configs["controller_config"].tokenizer_type = args.tokenizer
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / args.env_name
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env + f"_{args.tokenizer}" / args.env_name
     if not run_dir.exists():
         curr_run = 'run1'
     else:
