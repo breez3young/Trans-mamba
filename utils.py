@@ -1,7 +1,8 @@
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 import random
 import shutil
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -178,3 +179,183 @@ def generate_group_name(args, config):
         g_name = f'{args.env_name}_H{config.HORIZON}_T{config.nums_obs_token}_Vocab{config.OBS_VOCAB_SIZE}_{args.tokenizer}'
     
     return g_name
+
+
+from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
+from agent.models.world_model import MAWorldModel
+from agent.models.DreamerModel import DreamerModel
+from networks.dreamer.action import Actor
+from networks.dreamer.critic import AugmentedCritic, Critic
+
+def load_mamba_model(config, ckpt_path):
+    model = DreamerModel(config).eval()
+    actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).eval()
+    critic = AugmentedCritic(config.FEAT, config.HIDDEN).eval()
+
+    ckpt = torch.load(ckpt_path)
+    model.load_state_dict(ckpt['model'])
+    actor.load_state_dict(ckpt['actor'])
+    critic.load_state_dict(ckpt['critic'])
+
+    return {
+        "model": model.to(config.DEVICE),
+        "actor": actor.to(config.DEVICE),
+        "critic": critic.to(config.DEVICE),
+    }
+
+def load_mawm_model(config, ckpt_path):
+    if config.tokenizer_type == 'vq':
+        tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
+                                        codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).to(config.DEVICE).eval()
+    elif config.tokenizer_type == 'fsq':
+        levels = [8, 8, 8]
+        tokenizer = SimpleFSQAutoEncoder(in_dim=config.IN_DIM, num_tokens=config.nums_obs_token, levels=levels).to(config.DEVICE).eval()
+
+    if getattr(config, 'use_bin', None):
+        obs_vocab_size = config.bins if config.use_bin else config.OBS_VOCAB_SIZE
+    else:
+        obs_vocab_size = config.OBS_VOCAB_SIZE
+
+    perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
+    model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
+                         config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
+                         use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
+
+    actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+    critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
+
+    ckpt = torch.load(ckpt_path, map_location=config.DEVICE)
+
+    tokenizer.load_state_dict(ckpt['tokenizer'])
+    model.load_state_dict(ckpt['model'])
+    actor.load_state_dict(ckpt['actor'])
+    critic.load_state_dict(ckpt['critic'])
+
+    return {
+        "tokenizer": tokenizer,
+        "model": model,
+        "actor": actor,
+        "critic": critic,
+    }
+    
+def _wrap(d):
+    res = []
+    for key, value in d.items():
+        res.append(torch.tensor(value).float())
+    
+    res = torch.stack(res, dim=0)
+    return res
+
+@torch.no_grad()
+def _compute_mawm_errors(model, sample, horizons):
+    from agent.models.world_model_env import MAWorldModelEnv
+    wm_env = MAWorldModelEnv(tokenizer=model["tokenizer"], world_model=model["model"], device=sample["observations"].device, env_name='sc2')
+    
+    gt_obs = sample["observations"]
+    gt_actions = sample["actions"]
+    gt_av_actions = sample["av_actions"]
+    gt_r = sample["rewards"]
+    
+    pred_obs = []
+    pred_r = []
+    pred_av_actions = []
+    pred_dis = []
+    
+    init_obs = gt_obs[0].unsqueeze(0)
+    rec_obs, _ = wm_env.reset_from_initial_observations(init_obs)
+    
+    for t in range(horizons):
+        pred_obs.append(rec_obs)
+        
+        rec_obs, reward, done, av_action, _ = wm_env.step(torch.argmax(gt_actions[t].unsqueeze(0), dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
+        
+        pred_av_actions.append(av_action)
+        pred_r.append(reward)
+        pred_dis.append(done)
+        
+    pred_obs = torch.concat(pred_obs, dim=0)
+    pred_r = torch.concat(pred_r, dim=0)
+    pred_av_actions = torch.concat(pred_av_actions, dim=0)
+    pred_dis = torch.concat(pred_dis, dim=0)
+    
+    obs_l1_errors = (pred_obs - gt_obs).abs().sum(-1).mean()
+    obs_l2_errors = (pred_obs - gt_obs).pow(2).sum(-1).mean()
+
+    r_errors = (pred_r.squeeze() - gt_r).abs().mean()
+    
+    mean_dis = pred_dis.mean(0)
+    
+    return {
+        "obs_l1_errors": obs_l1_errors.item(),
+        "obs_l2_errors": obs_l2_errors.item(),
+        "r_errors": r_errors.item(),
+        "mean_discount": mean_dis,
+    }
+    
+@torch.no_grad()
+def _compute_mamba_errors(model, sample, horizons):
+    gt_obs = sample["observations"]
+    gt_actions = sample["actions"]
+    gt_av_actions = sample["av_actions"]
+    gt_r = sample["rewards"]
+    
+    pred_obs = []
+    pred_r = []
+    pred_av_actions = []
+    pred_dis = []
+    
+    init_obs = gt_obs[0].unsqueeze(0)
+    
+    embed = model.observation_encoder(init_obs.reshape(-1, n_agents, obs.shape[-1]))
+    embed = embed.reshape(init_obs.shape[0], init_obs.shape[1], n_agents, -1)
+    prev_state = model.representation.initial_state(init_obs.shape[1], init_obs.shape[2], device=obs.device)
+    prior, post, _ = rollout_representation(model.representation, obs.shape[0], embed, gt_actions, prev_state, last)
+    
+    
+    
+
+def compute_compounding_errors(models, sample, horizons):
+    test_times = 10
+    
+    mawm_m, mamba_m = None, None
+    for m in models:
+        if "tokenizer" in m:
+            mawm_m = m
+        else:
+            mamba_m = m
+    
+    length = sample["observations"].shape[0]
+    pbar = tqdm(range(test_times))
+        
+    c_errors = defaultdict(list)
+    
+    for _ in pbar:
+        start = np.random.randint(0, length - horizons)
+        end = start + horizons
+        splitted_sample = {k: v[start:end] for k, v in sample.items()}
+        
+        if "tokenizer" in m:
+            print(f"Testing mawm...")
+            error_dict = _compute_mawm_errors(m, splitted_sample, horizons)
+        else:
+            error_dict = _compute_mamba_errors(m, splitted_sample, horizons)
+            
+        pbar.set_description(
+            f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
+            + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
+            + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
+            + f"agent_aver_dis: {error_dict['mean_discount'].tolist()} | gt_ends?: {False if end != length else True}"
+        )
+        
+        for k, v in error_dict.items():
+            c_errors[k].append(v)
+    
+    import ipdb
+    ipdb.set_trace()
+    print(
+        f"Average {test_times} evaluations:"
+        + f"obs_l1_errors: {np.mean(c_errors['obs_l1_errors']):.4f} | "
+        + f"obs_l2_errors: {np.mean(c_errors['obs_l2_errors']):.4f} | "
+        + f"rew_l1_errors: {np.mean(c_errors['r_errors']):.4f}"
+    )
+    

@@ -121,7 +121,6 @@ class SimpleFSQAutoEncoder(nn.Module):
         )
 
         self.codebook = FSQ(levels, **fsq_kwargs)
-
         
     def encode(self, x, should_preprocess: bool = False):
         if should_preprocess:

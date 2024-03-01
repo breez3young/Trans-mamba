@@ -31,3 +31,6 @@ class StarCraft:
 
     def get_avail_agent_actions(self, handle):
         return self.env.get_avail_agent_actions(handle)
+    
+    def get_avail_actions(self):
+        return self.env.get_avail_actions()
