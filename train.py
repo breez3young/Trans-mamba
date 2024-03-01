@@ -12,6 +12,7 @@ from configs.dreamer.DreamerLearnerConfig import DreamerLearnerConfig
 from configs.flatland.TimetableConfigs import AllAgentLauncherConfig
 from env.flatland.params import SeveralAgents, PackOfAgents, LotsOfAgents
 from environments import Env, FlatlandType, FLATLAND_OBS_SIZE, FLATLAND_ACTION_SIZE
+from utils import generate_group_name
 
 
 def parse_args():
@@ -22,6 +23,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=1, help='Number of workers')
     parser.add_argument('--steps', type=int, default=1e6, help='Number of workers')
     parser.add_argument('--mode', type=str, default='disabled')
+    parser.add_argument('--tokenizer', type=str, default='vq')
     return parser.parse_args()
 
 
@@ -96,6 +98,9 @@ if __name__ == "__main__":
     configs["learner_config"].ENV_TYPE = Env(args.env)
     configs["controller_config"].ENV_TYPE = Env(args.env)
 
+    configs["learner_config"].tokenizer_type = args.tokenizer
+    configs["controller_config"].tokenizer_type = args.tokenizer
+
     # make run directory
     run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / args.env_name
     if not run_dir.exists():
@@ -111,6 +116,7 @@ if __name__ == "__main__":
     run_dir = run_dir / curr_run
     if not run_dir.exists():
         os.makedirs(str(run_dir))
+        os.makedirs(str(run_dir / "ckpt"))
 
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "agent"), dst=run_dir / "agent")
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "configs"), dst=run_dir / "configs")
@@ -118,14 +124,15 @@ if __name__ == "__main__":
 
     configs["learner_config"].RUN_DIR = str(run_dir)
 
+    group_name = generate_group_name(args, configs["learner_config"])
+
     global wandb
     import wandb
     wandb.init(
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
-        project="discretized bins",
-        group=f'{args.env_name}_H{configs["learner_config"].HORIZON}_X{configs["learner_config"].bins}_ib_discount',
-        # name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_epochs_{configs["learner_config"].MODEL_EPOCHS}_algo_{configs["learner_config"].EPOCHS}_iris_init_st_critic&policy_on_rec',
+        project="0301_sc2",
+        group=group_name,
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
     )
 

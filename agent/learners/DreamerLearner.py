@@ -17,6 +17,7 @@ from networks.dreamer.action import Actor
 from networks.dreamer.critic import AugmentedCritic, Critic
 
 from agent.models.tokenizer import Tokenizer, StateDecoder, StateEncoder
+from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
 from agent.models.world_model import MAWorldModel
 from utils import configure_optimizer
 from episode import SC2Episode
@@ -64,9 +65,21 @@ class DreamerLearner:
         self.config.update()
 
         # tokenizer
-        self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
-        self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
-                                   encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
+        # self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
+        # self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
+        #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
+        
+        if self.config.tokenizer_type == 'vq':
+            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
+                                                 codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).to(config.DEVICE).eval()
+            self.obs_vocab_size = config.OBS_VOCAB_SIZE
+        elif self.config.tokenizer_type == 'fsq':
+            # 2^8 -> [8, 6, 5], 2^10 -> [8, 5, 5, 5]
+            levels = [8, 8, 8]
+            self.tokenizer = SimpleFSQAutoEncoder(in_dim=config.IN_DIM, num_tokens=config.nums_obs_token, levels=levels).to(config.DEVICE).eval()
+            self.obs_vocab_size = np.prod(levels)
+        else:
+            raise NotImplementedError
         # ---------
 
         # world model (transformer)
@@ -111,7 +124,8 @@ class DreamerLearner:
             print('Not using & training tokenizer...')
 
     def init_optimizers(self):
-        self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
+        # self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
+        self.tokenizer_optimizer = torch.optim.AdamW(self.tokenizer.parameters(), lr=3e-4)
         self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
         # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.config.ACTOR_LR, weight_decay=0.00001)
@@ -122,6 +136,9 @@ class DreamerLearner:
                 'model': {k: v.cpu() for k, v in self.model.state_dict().items()},
                 'actor': {k: v.cpu() for k, v in self.actor.state_dict().items()},
                 'critic': {k: v.cpu() for k, v in self.critic.state_dict().items()}}
+
+    def save(self, save_path):
+        torch.save(self.params(), save_path)
 
     def step(self, rollout):
         if self.n_agents != rollout['action'].shape[-2]:
@@ -149,12 +166,32 @@ class DreamerLearner:
         intermediate_losses = defaultdict(float)
         # train tokenzier
         if not self.config.use_bin:
-            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.tokenizer)}", file=sys.stdout, disable=not self.tqdm_vis):
+            pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
+            for i in pbar:
                 samples = self.replay_buffer.sample_batch(batch_num_samples=512,
                                                           sequence_length=1,
                                                           sample_from_start=True)
                 samples = self._to_device(samples)
-                loss_dict = self.train_tokenizer(samples)
+                # loss_dict = self.train_tokenizer(samples)
+                if self.config.tokenizer_type == 'vq':
+                    loss_dict = self.train_vq_tokenizer(samples['observation'])
+
+                    pbar.set_description(
+                        f"Training tokenizer:"
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + 'rec_loss']:.4f} | "
+                        + f"cmt loss: {loss_dict[self.config.tokenizer_type + 'cmt_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + 'active']:.3f} | "
+                    )
+                elif self.config.tokenizer_type == 'fsq':
+                    loss_dict = self.train_fsq_tokenizer(samples['observation'])
+
+                    pbar.set_description(
+                        f"Training tokenizer:"
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + 'rec_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + 'active']:.3f} | "
+                    )
+                else:
+                    raise NotImplementedError
 
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
@@ -164,7 +201,8 @@ class DreamerLearner:
 
         if self.train_count > 20:
             # train transformer-based world model
-            for i in tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis):
+            pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
+            for i in pbar:
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
                                                           sequence_length=self.config.SEQ_LENGTH,
                                                           sample_from_start=True)
@@ -173,6 +211,15 @@ class DreamerLearner:
 
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
+
+                pbar.set_description(
+                    f"Training world model:"
+                    + f"total loss: {loss_dict['world_model/total_loss']:.4f} | "
+                    + f"obs loss: {loss_dict['world_model/loss_obs']:.4f} | "
+                    + f"rew loss: {loss_dict['world_model/loss_rewards']:.4f} | "
+                    + f"dis loss: {loss_dict['world_model/loss_ends']:.3f} | "
+                    + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
+                )
 
         if self.train_count == 46:
             print('Start training actor & critic...')
@@ -190,21 +237,63 @@ class DreamerLearner:
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         self.cur_wandb_epoch += 1
     
-    def train_tokenizer(self, samples):
+    def train_vq_tokenizer(self, x):
+        assert type(self.tokenizer) == SimpleVQAutoEncoder
         self.tokenizer.train()
-        loss, loss_dict = self.tokenizer.compute_loss(samples)
+
+        out, indices, cmt_loss = self.tokenizer(x, True, True)
+        rec_loss = (out - x).abs().mean()
+        loss = rec_loss + self.config.alpha * cmt_loss
+
+        active_rate = indices.detach().unique().numel() / self.obs_vocab_size * 100
+
         self.apply_optimizer(self.tokenizer_optimizer, self.tokenizer, loss, self.config.max_grad_norm)
         self.tokenizer.eval()
+
+        loss_dict = {
+            self.config.tokenizer_type + "cmt_loss": cmt_loss.item(),
+            self.config.tokenizer_type + "rec_loss": rec_loss.item(),
+            self.config.tokenizer_type + "active": active_rate,
+        }
+
         return loss_dict
+
+    def train_fsq_tokenizer(self, x):
+        assert type(self.tokenizer) == SimpleFSQAutoEncoder
+        self.tokenizer.train()
+
+        out, indices = self.tokenizer(x, True, True)
+        loss = (out - x).abs().mean()
+
+        active_rate = indices.detach().unique().numel() / self.obs_vocab_size * 100
+
+        self.apply_optimizer(self.tokenizer_optimizer, self.tokenizer, loss, self.config.max_grad_norm)
+        self.tokenizer.eval()
+
+        loss_dict = {
+            self.config.tokenizer_type + "rec_loss": loss.item(),
+            self.config.tokenizer_type + "active": active_rate,
+        }
+
+        return loss_dict
+
+    # def train_tokenizer(self, samples):
+    #     self.tokenizer.train()
+    #     loss, loss_dict = self.tokenizer.compute_loss(samples)
+    #     self.apply_optimizer(self.tokenizer_optimizer, self.tokenizer, loss, self.config.max_grad_norm)
+    #     self.tokenizer.eval()
+    #     return loss_dict
     
     def train_model(self, samples):
         self.model.train()
+        # loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
         loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
         self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm) # or GRAD_CLIP
         self.model.eval()
         return loss_dict
 
     def train_agent_with_transformer(self, samples):
+        # self.tokenizer.eval()
         self.tokenizer.eval()
         self.model.eval()
 

@@ -43,11 +43,13 @@ class DreamerRunner:
             wandb.log({'reward': info["reward"], 'steps': cur_steps})
             wandb.log({'returns': returns, "episodes": cur_episode})
 
-            print(cur_episode, self.learner.total_samples, info["reward"], 'Returns: %.4f' % returns)
+            print(cur_episode, cur_steps, info["reward"], 'Returns: %.4f' % returns)
 
             self.learner.step(rollout)
 
             if cur_episode >= max_episodes or cur_steps >= max_steps:
+                self.learner.save(self.learner.config.RUN_DIR + "/ckpt/model.pth")
                 break
+            
             self.server.append(info['idx'], self.learner.params())
 

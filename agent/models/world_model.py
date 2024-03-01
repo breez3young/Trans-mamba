@@ -192,8 +192,13 @@ class MAWorldModel(nn.Module):
         ### modified for ablation ###
         if not self.use_bin:
             with torch.no_grad():
-                tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
-                obs_tokens = tokenizer_encodings.tokens
+                ### when tokenizer is `Tokenizer` run these two lines
+                # tokenizer_encodings = tokenizer.encode(batch['observation'], should_preprocess=True)  # (B, L, K)
+                # obs_tokens = tokenizer_encodings.tokens
+
+                ### when tokenizer is `SimpleVQAutoEncoder` run these two lines
+                obs_t_embeds, obs_tokens = tokenizer.encode(batch['observation'], should_preprocess=True)
+                obs_tokens = obs_tokens.to(torch.long)
         else:
             obs_tokens = discretize_into_bins(batch['observation'], self.bins)
         ### --------------------- ###

@@ -165,3 +165,16 @@ def action_split_into_bins(actions, bins: int):
     boundaries = torch.linspace(-1 - eps, 1, bins + 1, device=actions.device, dtype=torch.float32)
     bucketized_act = torch.bucketize(actions.contiguous(), boundaries) - 1
     return bucketized_act.to(actions.device)
+
+def generate_group_name(args, config):
+    if getattr(config, 'use_bin', None):
+        use_vq = True
+    else:
+        use_vq = not config.use_bin
+    
+    if not use_vq:
+        g_name = f'{args.env_name}_H{config.HORIZON}_X{config.bins}'
+    else:
+        g_name = f'{args.env_name}_H{config.HORIZON}_T{config.nums_obs_token}_Vocab{config.OBS_VOCAB_SIZE}_{args.tokenizer}'
+    
+    return g_name

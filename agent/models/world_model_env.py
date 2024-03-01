@@ -53,7 +53,8 @@ class MAWorldModelEnv:
         if self.use_bin:
             obs_tokens = discretize_into_bins(observations, self.bins)
         else:
-            obs_tokens = self.tokenizer.encode(observations, should_preprocess=True).tokens    # (B, N, Obs_dim) -> (B, N, K)
+            # obs_tokens = self.tokenizer.encode(observations, should_preprocess=True).tokens    # (B, N, Obs_dim) -> (B, N, K)
+            _, obs_tokens = self.tokenizer.encode(observations, should_preprocess=True)
 
         num_observations_tokens = obs_tokens.shape[-1]
         if self.num_observations_tokens is None:
@@ -165,11 +166,15 @@ class MAWorldModelEnv:
         # assert self.obs_tokens.shape[0] % self.n_agents == 0
         # bs = self.obs_tokens.shape[0]
         if not self.use_bin:
-            embedded_tokens = self.tokenizer.embedding(self.obs_tokens)     # (B, K, E)
-            rec = self.tokenizer.decode(embedded_tokens, should_postprocess=True)
+            # embedded_tokens = self.tokenizer.embedding(self.obs_tokens)     # (B, K, E)
+            # rec = self.tokenizer.decode(embedded_tokens, should_postprocess=True)
             # rec = rearrange(rec, '(b n) o -> b n o', b=int(bs / self.n_agents), n=self.n_agents)
+            
+            # decode内部已经做了后处理(clamp 到[-1, 1])
+            rec = self.tokenizer.decode(self.obs_tokens, should_postprocess=True)
+
             if self.env_name == "sc2":
-                return torch.clamp(rec, -1, 1)
+                return rec
             elif self.env_name == "maniskill2":
                 return rec
             else:

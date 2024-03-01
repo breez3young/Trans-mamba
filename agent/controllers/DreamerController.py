@@ -9,9 +9,11 @@ from einops import rearrange
 from agent.models.DreamerModel import DreamerModel
 from agent.models.world_model import MAWorldModel
 from agent.models.tokenizer import StateEncoder, StateDecoder, Tokenizer
+from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
 from networks.dreamer.action import Actor
 from utils import discretize_into_bins, bins2continuous
 
+import ipdb
 
 class DreamerController:
 
@@ -19,9 +21,21 @@ class DreamerController:
         # self.model = DreamerModel(config).eval()
         # tokenizer
         config.update()
-        self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
-        self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
-                                   encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
+        # self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
+        # self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
+        #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
+
+        if config.tokenizer_type == 'vq':
+            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
+                                                 codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).eval()
+            self.obs_vocab_size = config.OBS_VOCAB_SIZE
+        elif config.tokenizer_type == 'fsq':
+            # 2^8 -> [8, 6, 5], 2^10 -> [8, 5, 5, 5]
+            self.tokenizer = SimpleFSQAutoEncoder(in_dim=config.IN_DIM, num_tokens=config.nums_obs_token, levels=[8, 6, 5]).eval()
+            self.obs_vocab_size = np.prod([8, 6, 5])
+        else:
+            raise NotImplementedError
+
         # ---------
 
         # world model (transformer)
@@ -65,27 +79,6 @@ class DreamerController:
         for k, v in items.items():
             if v is not None:
                 self.buffer[k].append(v.squeeze(0).detach().clone().numpy())
-
-    # @torch.no_grad()
-    # def step(self, observations, avail_actions, nn_mask):
-    #     """"
-    #     Compute policy's action distribution from inputs, and sample an
-    #     action. Calls the model to produce mean, log_std, value estimate, and
-    #     next recurrent state.  Moves inputs to device and returns outputs back
-    #     to CPU, for the sampler.  Advances the recurrent state of the agent.
-    #     (no grad)
-    #     """
-    #     state = self.model(observations, self.prev_actions, self.prev_rnn_state, nn_mask)
-    #     feats = state.get_features()
-    #     action, pi = self.actor(feats)
-    #     if avail_actions is not None:
-    #         pi[avail_actions == 0] = -1e10
-    #         action_dist = OneHotCategorical(logits=pi)
-    #         action = action_dist.sample()
-
-    #     self.advance_rnns(state)
-    #     self.prev_actions = action.clone()
-    #     return action.squeeze(0).clone()
     
     @torch.no_grad()
     def step(self, observations, avail_actions, nn_mask):
@@ -100,7 +93,7 @@ class DreamerController:
         # obs_encodings = self.tokenizer.encode(observations, should_preprocess=True).z_quantized
         # feats = rearrange(obs_encodings, 'b n k e -> b n (k e)')
         if not self.use_bin:
-            feats = torch.clamp(self.tokenizer.encode_decode(observations, True, True), -1, 1)
+            feats = self.tokenizer.encode_decode(observations, True, True)
         else:
             tokens = discretize_into_bins(observations, self.bins)
             feats = bins2continuous(tokens, self.bins)
