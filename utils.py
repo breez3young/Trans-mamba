@@ -177,33 +177,33 @@ def generate_group_name(args, config):
         g_name = f'{args.env_name}_H{config.HORIZON}_X{config.bins}'
     else:
         g_name = f'{args.env_name}_H{config.HORIZON}_T{config.nums_obs_token}_Vocab{config.OBS_VOCAB_SIZE}_{args.tokenizer}'
+        if args.tokenizer == 'vq':
+            g_name += f"_decay{config.ema_decay}"
     
     return g_name
 
 
-from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
-from agent.models.world_model import MAWorldModel
-from agent.models.DreamerModel import DreamerModel
-from networks.dreamer.action import Actor
-from networks.dreamer.critic import AugmentedCritic, Critic
-
 def load_mamba_model(config, ckpt_path):
+    from agent.models.DreamerModel import DreamerModel
+    from networks.dreamer.action import Actor
+    
     model = DreamerModel(config).eval()
     actor = Actor(config.FEAT, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).eval()
-    critic = AugmentedCritic(config.FEAT, config.HIDDEN).eval()
 
     ckpt = torch.load(ckpt_path)
     model.load_state_dict(ckpt['model'])
     actor.load_state_dict(ckpt['actor'])
-    critic.load_state_dict(ckpt['critic'])
 
     return {
         "model": model.to(config.DEVICE),
         "actor": actor.to(config.DEVICE),
-        "critic": critic.to(config.DEVICE),
     }
 
 def load_mawm_model(config, ckpt_path):
+    from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
+    from agent.models.world_model import MAWorldModel
+    from networks.dreamer.action import Actor
+    
     if config.tokenizer_type == 'vq':
         tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
                                         codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).to(config.DEVICE).eval()
@@ -222,20 +222,17 @@ def load_mawm_model(config, ckpt_path):
                          use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
 
     actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
-    critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
 
     ckpt = torch.load(ckpt_path, map_location=config.DEVICE)
 
     tokenizer.load_state_dict(ckpt['tokenizer'])
     model.load_state_dict(ckpt['model'])
     actor.load_state_dict(ckpt['actor'])
-    critic.load_state_dict(ckpt['critic'])
 
     return {
         "tokenizer": tokenizer,
         "model": model,
         "actor": actor,
-        "critic": critic,
     }
     
 def _wrap(d):
@@ -292,8 +289,6 @@ def _compute_mawm_errors(model, sample, horizons):
         "mean_discount": mean_dis,
     }
 
-from configs.dreamer.DreamerAgentConfig import RSSMState
-
 def stack_states(rssm_states: list, dim):
     return reduce_states(rssm_states, dim, torch.stack)
 
@@ -303,6 +298,8 @@ def cat_states(rssm_states: list, dim):
 
 
 def reduce_states(rssm_states: list, dim, func):
+    from configs.dreamer.DreamerAgentConfig import RSSMState
+    
     return RSSMState(*[func([getattr(state, key) for state in rssm_states], dim=dim)
                        for key in rssm_states[0].__dict__.keys()])
 
@@ -396,7 +393,7 @@ def compute_compounding_errors(models, sample, horizons):
                 + f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
                 + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
                 + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
-                + f"agent_aver_dis: {[round(v, 4) for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {False if end != length else True}"
+                + f"agent_aver_dis: {[format(v, '.4f') for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {end if end != length else end}"
             )
             
             for k, v in error_dict.items():
@@ -418,25 +415,27 @@ def compute_compounding_errors(models, sample, horizons):
                 + f"obs_l1_errors: {error_dict['obs_l1_errors']:.4f} | "
                 + f"obs_l2_errors: {error_dict['obs_l2_errors']:.4f} | "
                 + f"rew_l1_errors: {error_dict['r_errors']:.4f} | "
-                + f"agent_aver_dis: {[round(v, 4) for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {False if end != length else True}"
+                + f"agent_aver_dis: {[format(v, '.4f') for v in error_dict['mean_discount'].tolist()]} | gt_ends?: {False if end != length else True}"
             )
         
             for k, v in error_dict.items():
                 c_mamba_errors[k].append(v)
 
         print()
-        
-    print(
-        f"Average {test_times} evaluations for MAWM: "
-        + f"obs_l1_errors: {np.mean(c_mawm_errors['obs_l1_errors']):.4f} | "
-        + f"obs_l2_errors: {np.mean(c_mawm_errors['obs_l2_errors']):.4f} | "
-        + f"rew_l1_errors: {np.mean(c_mawm_errors['r_errors']):.4f}"
-    )
     
-    print(
-        f"Average {test_times} evaluations for MAMBA: "
-        + f"obs_l1_errors: {np.mean(c_mamba_errors['obs_l1_errors']):.4f} | "
-        + f"obs_l2_errors: {np.mean(c_mamba_errors['obs_l2_errors']):.4f} | "
-        + f"rew_l1_errors: {np.mean(c_mamba_errors['r_errors']):.4f}"
-    )
+    if mawm_m is not None:
+        print(
+            f"Average {test_times} evaluations for MAWM: "
+            + f"obs_l1_errors: {np.mean(c_mawm_errors['obs_l1_errors']):.4f} | "
+            + f"obs_l2_errors: {np.mean(c_mawm_errors['obs_l2_errors']):.4f} | "
+            + f"rew_l1_errors: {np.mean(c_mawm_errors['r_errors']):.4f}"
+        )
+    
+    if mamba_m is not None:
+        print(
+            f"Average {test_times} evaluations for MAMBA: "
+            + f"obs_l1_errors: {np.mean(c_mamba_errors['obs_l1_errors']):.4f} | "
+            + f"obs_l2_errors: {np.mean(c_mamba_errors['obs_l2_errors']):.4f} | "
+            + f"rew_l1_errors: {np.mean(c_mamba_errors['r_errors']):.4f}"
+        )
     

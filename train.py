@@ -24,6 +24,7 @@ def parse_args():
     parser.add_argument('--steps', type=int, default=1e6, help='Number of workers')
     parser.add_argument('--mode', type=str, default='disabled')
     parser.add_argument('--tokenizer', type=str, default='vq')
+    parser.add_argument('--decay', type=float, default=0.8)
     return parser.parse_args()
 
 
@@ -100,9 +101,11 @@ if __name__ == "__main__":
 
     configs["learner_config"].tokenizer_type = args.tokenizer
     configs["controller_config"].tokenizer_type = args.tokenizer
+    configs["learner_config"].ema_decay = args.decay
+    configs["controller_config"].ema_decay = args.decay
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env + f"_{args.tokenizer}" / args.env_name
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/test_results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -133,7 +136,7 @@ if __name__ == "__main__":
         mode=args.mode,
         project="0301_sc2",
         group=group_name,
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
+        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_reward_mean',
     )
 
     exp = Experiment(steps=args.steps,

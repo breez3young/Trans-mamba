@@ -75,6 +75,7 @@ class DreamerConfig(Config):
         self.OBS_VOCAB_SIZE = 512 # 512
 
         self.alpha = 10.
+        self.ema_decay = 0.8
 
         self.encoder_config_fn = partial(StateEncoderConfig,
             nums_obs_token=self.nums_obs_token, 

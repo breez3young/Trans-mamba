@@ -1,5 +1,5 @@
 # map: 2s_vs_1sc(17) 2m_vs_1z(16) 3s_vs_4z(42)
-map_name="2s_vs_1sc"
+map_name="2m_vs_1z"
 env="starcraft"
 seed=2
 
