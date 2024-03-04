@@ -250,7 +250,7 @@ class MAWorldModel(nn.Module):
             loss_av_actions = -(pred_av_actions.log_prob(batch['av_action'][:, 1:]) * valid_mask[:, 1:]).sum() / valid_mask[:, 1:].sum()
 
         else:  # use mamba databuffer
-            pass
+            raise NotImplementedError("Currently, MAWM does not support the usage of MAMBA databuffer.")
 
         loss = loss_obs + loss_ends + loss_rewards + loss_av_actions + info_loss
 

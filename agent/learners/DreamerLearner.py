@@ -177,17 +177,17 @@ class DreamerLearner:
 
                     pbar.set_description(
                         f"Training tokenizer:"
-                        + f"rec loss: {loss_dict[self.config.tokenizer_type + 'rec_loss']:.4f} | "
-                        + f"cmt loss: {loss_dict[self.config.tokenizer_type + 'cmt_loss']:.4f} | "
-                        + f"active %: {loss_dict[self.config.tokenizer_type + 'active']:.3f} | "
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + '/rec_loss']:.4f} | "
+                        + f"cmt loss: {loss_dict[self.config.tokenizer_type + '/cmt_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + '/active']:.3f} | "
                     )
                 elif self.config.tokenizer_type == 'fsq':
                     loss_dict = self.train_fsq_tokenizer(samples['observation'])
 
                     pbar.set_description(
                         f"Training tokenizer:"
-                        + f"rec loss: {loss_dict[self.config.tokenizer_type + 'rec_loss']:.4f} | "
-                        + f"active %: {loss_dict[self.config.tokenizer_type + 'active']:.3f} | "
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + '/rec_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + '/active']:.3f} | "
                     )
                 else:
                     raise NotImplementedError
@@ -226,8 +226,8 @@ class DreamerLearner:
         if self.train_count > 45:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 2,
-                                                          sequence_length=10,
+                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
+                                                          sequence_length=1, # 10
                                                           sample_from_start=False,
                                                           valid_sample=True)
                 samples = self._to_device(samples)
@@ -250,9 +250,9 @@ class DreamerLearner:
         self.tokenizer.eval()
 
         loss_dict = {
-            self.config.tokenizer_type + "cmt_loss": cmt_loss.item(),
-            self.config.tokenizer_type + "rec_loss": rec_loss.item(),
-            self.config.tokenizer_type + "active": active_rate,
+            self.config.tokenizer_type + "/cmt_loss": cmt_loss.item(),
+            self.config.tokenizer_type + "/rec_loss": rec_loss.item(),
+            self.config.tokenizer_type + "/active": active_rate,
         }
 
         return loss_dict
@@ -270,8 +270,8 @@ class DreamerLearner:
         self.tokenizer.eval()
 
         loss_dict = {
-            self.config.tokenizer_type + "rec_loss": loss.item(),
-            self.config.tokenizer_type + "active": active_rate,
+            self.config.tokenizer_type + "/rec_loss": loss.item(),
+            self.config.tokenizer_type + "/active": active_rate,
         }
 
         return loss_dict

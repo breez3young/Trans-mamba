@@ -154,7 +154,7 @@ class SC2Episode:
     def __post_init__(self):
         assert len(self.observation) == len(self.action) == len(self.av_action) == len(self.reward) == len(self.done) == len(self.filled)
         if self.done.sum() > 0:
-            idx_end = torch.argmax(self.done) + 1
+            idx_end = self.done.size(0) # torch.argmax(self.done) + 1
             self.observation = self.observation[:idx_end]
             self.action = self.action[:idx_end]
             self.av_action = self.av_action[:idx_end]
@@ -163,7 +163,11 @@ class SC2Episode:
             self.filled = self.filled[:idx_end]
     
     def __len__(self) -> int:
-        return self.observation.size(0)
+        # accounting for the existence of absorbing state
+        if self.done.all(-2).sum() > 1:
+            return self.observation.size(0) - self.done.all(-2).sum() + 1
+        else:
+            return self.observation.size(0)
     
     def segment(self, start: int, stop: int, should_pad: bool = False) -> Episode:
         assert start < len(self) and stop > 0 and start < stop

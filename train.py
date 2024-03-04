@@ -105,7 +105,7 @@ if __name__ == "__main__":
     configs["controller_config"].ema_decay = args.decay
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / (args.env_name + f"_{args.tokenizer}")
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/test_results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:

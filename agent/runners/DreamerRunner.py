@@ -30,6 +30,8 @@ class DreamerRunner:
 
     def run(self, max_steps=10 ** 10, max_episodes=10 ** 10):
         cur_steps, cur_episode = 0, 0
+        save_interval_steps = 0
+        last_save_steps = 0
 
         wandb.define_metric("steps")
         wandb.define_metric("reward", step_metric="steps")
@@ -38,6 +40,7 @@ class DreamerRunner:
             rollout, info = self.server.run()
             cur_steps += info["steps_done"]
             cur_episode += 1
+            save_interval_steps += info["steps_done"]
             returns = rollout["reward"].sum(0).mean()
 
             wandb.log({'reward': info["reward"], 'steps': cur_steps})
@@ -47,8 +50,11 @@ class DreamerRunner:
 
             self.learner.step(rollout)
 
+            if (save_interval_steps - last_save_steps) > 10000:
+                self.learner.save(self.learner.config.RUN_DIR + f"/ckpt/model_{save_interval_steps // 1000}Ksteps.pth")
+                last_save_steps = save_interval_steps
+
             if cur_episode >= max_episodes or cur_steps >= max_steps:
-                self.learner.save(self.learner.config.RUN_DIR + "/ckpt/model.pth")
                 break
             
             self.server.append(info['idx'], self.learner.params())
