@@ -4,4 +4,4 @@ env="starcraft"
 seed=2
 
 
-CUDA_VISIBLE_DEVICES=0 python train.py --n_workers 1 --env ${env} --env_name ${map_name} --seed ${seed} --steps 50000 --mode disabled --tokenizer fsq
+CUDA_VISIBLE_DEVICES=0 python train.py --n_workers 1 --env ${env} --env_name ${map_name} --seed ${seed} --steps 50000 --mode disabled --tokenizer vq --decay 0.99

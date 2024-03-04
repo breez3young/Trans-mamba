@@ -68,10 +68,9 @@ class DreamerLearner:
         # self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         # self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
-        
         if self.config.tokenizer_type == 'vq':
             self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
-                                                 codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).to(config.DEVICE).eval()
+                                                 codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True, decay=config.ema_decay).to(config.DEVICE).eval()
             self.obs_vocab_size = config.OBS_VOCAB_SIZE
         elif self.config.tokenizer_type == 'fsq':
             # 2^8 -> [8, 6, 5], 2^10 -> [8, 5, 5, 5]
