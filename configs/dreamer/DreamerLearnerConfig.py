@@ -43,7 +43,7 @@ class DreamerLearnerConfig(DreamerConfig):
         self.DEVICE = 'cuda'
         self.GRAD_CLIP = 100.0
         # self.HORIZON = 15
-        self.ENTROPY = 0.001
+        self.ENTROPY = 0.001  # with larger 0.01, we can obtain a little bit better performance on 2m_vs_1z
         self.ENTROPY_ANNEALING = 1.0 # 0.99998
         self.GRAD_CLIP_POLICY = 100.0
 

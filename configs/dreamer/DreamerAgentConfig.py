@@ -58,9 +58,9 @@ class DreamerConfig(Config):
         self.ACTION_HIDDEN = 256
         self.REWARD_LAYERS = 2
         self.REWARD_HIDDEN = 256
-        self.GAMMA = 0.99
+        self.GAMMA = 0.99  # discount factor
         self.DISCOUNT = 0.99
-        self.DISCOUNT_LAMBDA = 0.95
+        self.DISCOUNT_LAMBDA = 0.95  # lambda in dreamer v2
         self.IN_DIM = 30
 
         ## discretize params

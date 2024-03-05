@@ -1,5 +1,6 @@
 from collections import defaultdict
 from copy import deepcopy
+import random
 
 import numpy as np
 import torch
@@ -45,6 +46,9 @@ class DreamerController:
         # -------------------------
 
         self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
+        
+        self.eps = config.epsilon
+        
         self.expl_decay = config.EXPL_DECAY
         self.expl_noise = config.EXPL_NOISE
         self.expl_min = config.EXPL_MIN
@@ -104,7 +108,11 @@ class DreamerController:
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample()
 
-        self.prev_actions = action.clone()
+        # epsilon exploration
+        if random.random() < self.eps:
+            action_dist = OneHotCategorical(probs=avail_actions / avail_actions.sum(-1, keepdim=True))
+            action = action_dist.sample()
+        
         return action.squeeze(0).clone()
 
     def advance_rnns(self, state):

@@ -6,9 +6,12 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import psutil
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from episode import Episode, SC2Episode
+
+import ipdb
 
 Batch = Dict[str, torch.Tensor]
 
@@ -199,6 +202,57 @@ class EpisodesDatasetRamMonitoring(EpisodesDataset):
 
 
 class MultiAgentEpisodesDataset(EpisodesDatasetRamMonitoring):
+    def __init__(self, max_ram_usage: str, name: Optional[str] = None, temp = None) -> None:
+        super().__init__(max_ram_usage, name)
+        self.sample_visits = torch.zeros(100000, dtype=torch.long, device='cpu')
+        self.temp = temp
+        
+    def _compute_visit_probs(self, n):
+        if self.temp == 'inf':
+            visits = self.sample_visits[:n].float()
+            visit_sum = visits.sum()
+            if visit_sum == 0:
+                probs = torch.full_like(visits, 1 / n)
+            else:
+                probs = 1 - visits / visit_sum
+        else:
+            logits = self.sample_visits[:n].float() / -self.temp
+            probs = F.softmax(logits, dim=0)
+        assert probs.device.type == 'cpu'
+        return probs
+    
+    # def _sample_episodes_segments(self, batch_num_samples: int, sequence_length: int, sample_from_start: bool, valid_sample: bool) -> List[Episode]:
+    #     # updated samplling indices
+    #     n = len(self.episodes)
+    #     probs = self._compute_visit_probs(n)
+    #     start_idx = torch.multinomial(probs, batch_num_samples, replacement=True)
+        
+    #     ipdb.set_trace()
+        
+    #     # stay on cpu
+    #     flat_idx = start_idx.reshape(-1)
+    #     flat_idx, counts = torch.unique(flat_idx, return_counts=True)
+    #     self.sample_visits[flat_idx] += counts
+        
+    #     ipdb.set_trace()
+        
+    #     sampled_episodes_segments = []
+    #     for sampled_episode in sampled_episodes:
+    #         if not valid_sample:
+    #             if sample_from_start:
+    #                 start = random.randint(0, len(sampled_episode) - 1)
+    #                 stop = start + sequence_length
+    #             else:
+    #                 stop = random.randint(1, len(sampled_episode))
+    #                 start = stop - sequence_length
+    #         else:
+    #             start = random.randint(0, len(sampled_episode) - sequence_length)
+    #             stop = start + sequence_length
+
+    #         sampled_episodes_segments.append(sampled_episode.segment(start, stop, should_pad=True))
+    #         assert len(sampled_episodes_segments[-1]) == sequence_length
+    #     return sampled_episodes_segments
+    
 
     def _collate_episodes_segments(self, episodes_segments: List[Episode]) -> Batch:
         episodes_segments = [e_s.__dict__ for e_s in episodes_segments]

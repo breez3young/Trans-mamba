@@ -6,6 +6,7 @@ class DreamerControllerConfig(DreamerConfig):
     def __init__(self):
         super().__init__()
 
+        self.epsilon = 0.05
         self.EXPL_DECAY = 0.9999
         self.EXPL_NOISE = 0.
         self.EXPL_MIN = 0.

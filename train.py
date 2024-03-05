@@ -105,7 +105,7 @@ if __name__ == "__main__":
     configs["controller_config"].ema_decay = args.decay
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/test_results") / args.env / (args.env_name + f"_{args.tokenizer}")
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -135,8 +135,9 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="0301_sc2",
-        group="(c)" + group_name,
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_reward_mean',
+        group="(eps 0.05+no as)" + group_name,
+        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
+        notes="epsilon exploration, no absorbing state and a&c on rec obs"
     )
 
     exp = Experiment(steps=args.steps,

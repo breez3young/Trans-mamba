@@ -334,7 +334,7 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
         actor_feats.append(rec_obs)
         policies.append(pi)
         actions.append(action)
-        critic_feats.append(critic_feat)
+        critic_feats.append(rec_obs) # critic_feat
 
         rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         

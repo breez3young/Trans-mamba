@@ -164,8 +164,9 @@ class SC2Episode:
     
     def __len__(self) -> int:
         # accounting for the existence of absorbing state
-        if self.done.all(-2).sum() > 1:
-            return self.observation.size(0) - self.done.all(-2).sum() + 1
+        num_absorbing_state = int(self.done[:, 0].sum()) #.to(torch.long)
+        if num_absorbing_state > 1:
+            return self.observation.size(0) - num_absorbing_state + 1
         else:
             return self.observation.size(0)
     
