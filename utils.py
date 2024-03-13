@@ -8,6 +8,19 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+def symlog(x):
+    if type(x) == np.ndarray:
+        return np.sign(x) * np.log(np.abs(x) + 1)
+    elif type(x) == torch.Tensor:
+        return torch.sign(x) * torch.log(torch.abs(x) + 1)
+
+def symexp(x):
+    if type(x) == np.ndarray:
+        return np.sign(x) * (np.exp(np.abs(x)) + 1)
+    elif type(x) == torch.Tensor:
+        return torch.sign(x) * (torch.exp(torch.abs(x)) + 1)
+
+
 
 def action_split_into_bins(actions, bins: int):
     # assume space of actions should be Box(-1, 1)

@@ -56,8 +56,8 @@ class DreamerWorker:
         observations = torch.cat(observations).unsqueeze(0)
         av_action = torch.stack(avail_actions).unsqueeze(0) if len(avail_actions) > 0 else None
         nn_mask = nn_mask.unsqueeze(0).repeat(8, 1, 1) if nn_mask is not None else None
-        actions = self.controller.step(observations, av_action, nn_mask)
-        return actions, observations, torch.cat(fakes).unsqueeze(0), av_action
+        actions, ent = self.controller.step(observations, av_action, nn_mask)
+        return actions, observations, torch.cat(fakes).unsqueeze(0), av_action, ent
 
     def _wrap(self, d):
         for key, value in d.items():
@@ -93,7 +93,7 @@ class DreamerWorker:
 
         while True:
             steps_done += 1
-            actions, obs, fakes, av_actions = self._select_actions(state)
+            actions, obs, fakes, av_actions, ent = self._select_actions(state)
             next_state, reward, done, info = self.env.step([action.argmax() for i, action in enumerate(actions)])
             next_state, reward, done = self._wrap(deepcopy(next_state)), self._wrap(deepcopy(reward)), self._wrap(deepcopy(done))
             self.done = done
@@ -102,7 +102,9 @@ class DreamerWorker:
                                            "reward": self.augment(reward),
                                            "done": self.augment(done),
                                            "fake": fakes,
-                                           "avail_action": av_actions})
+                                           "avail_action": av_actions,
+                                           "entropy": ent, # newly added
+                                           })
 
             state = next_state
             if all([done[key] == 1 for key in range(self.env.n_agents)]):

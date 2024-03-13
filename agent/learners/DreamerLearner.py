@@ -94,9 +94,14 @@ class DreamerLearner:
         # self.critic = AugmentedCritic(config.critic_FEAT, config.HIDDEN).to(config.DEVICE)
 
         # based on reconstructed obs
-        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
-        self.critic = AugmentedCritic(config.IN_DIM, config.HIDDEN).to(config.DEVICE)
-
+        if not self.config.use_stack:
+            self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+            self.critic = AugmentedCritic(config.IN_DIM, config.HIDDEN).to(config.DEVICE)
+        
+        else:
+            print(f"Use stacking observation mode. Currently stack {config.stack_obs_num} observations for decision making.")
+            self.actor = Actor(config.IN_DIM * config.stack_obs_num, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+            self.critic = AugmentedCritic(config.IN_DIM * config.stack_obs_num, config.HIDDEN).to(config.DEVICE)
 
         initialize_weights(self.actor)
         initialize_weights(self.critic, mode='xavier')
@@ -106,8 +111,19 @@ class DreamerLearner:
         
         ## (debug) pre-load mamba training buffer
         if self.config.is_preload:
+            print(f"Load offline dataset from {self.config.load_path}")
             self.replay_buffer.load_from_pkl(self.config.load_path)
         
+        if self.config.use_external_rew_model:
+            from networks.dreamer.reward_estimator import Reward_estimator
+
+            pretrained_rew_model_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/ckpt/rew_model_ep60.pth"
+            print(f"Load pretrained reward model from {pretrained_rew_model_path}")
+
+            self.rew_model = Reward_estimator(in_dim=config.IN_DIM, hidden_size=256, n_agents=config.NUM_AGENTS).to(config.DEVICE)
+            checkpoint = torch.load(pretrained_rew_model_path)
+            self.rew_model.load_state_dict(checkpoint['model'])
+            self.rew_model.eval()
         
         self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
                                                  config.DEVICE, config.ENV_TYPE)
@@ -229,13 +245,13 @@ class DreamerLearner:
         if self.train_count == 46:
             print('Start training actor & critic...')
 
-        if self.train_count > 45:
+        if self.train_count > 0:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
-                                                          sequence_length=1, # 10
+                                                          sequence_length=self.config.stack_obs_num if self.config.use_stack else 1,
                                                           sample_from_start=False,
-                                                          valid_sample=True)
+                                                          valid_sample=False)
                 samples = self._to_device(samples)
                 self.train_agent_with_transformer(samples)
 
@@ -305,11 +321,15 @@ class DreamerLearner:
         actions, av_actions, old_policy, actor_feat, critic_feat, returns \
               = trans_actor_rollout(samples['observation'],
                                     samples['av_action'],
-                                    samples['done'], # samples['last']
+                                    samples['filled'], # samples['last']
                                     self.tokenizer, self.model,
                                     self.actor,
-                                    self.old_critic, # self.critic
-                                    self.config)
+                                    self.critic, # self.critic
+                                    self.config,
+                                    external_rew_model=self.rew_model if self.config.use_external_rew_model else None,
+                                    use_stack=self.config.use_stack,
+                                    stack_obs_num=self.config.stack_obs_num if self.config.use_stack else None,
+                                    )
         
         adv = returns.detach() - self.critic(critic_feat).detach()
         if self.config.ENV_TYPE == Env.STARCRAFT:
@@ -339,36 +359,36 @@ class DreamerLearner:
             self.old_critic = deepcopy(self.critic)
             self.cur_update = 0
 
-    def train_agent(self, samples):
-        actions, av_actions, old_policy, imag_feat, returns = actor_rollout(samples['observation'],
-                                                                            samples['action'],
-                                                                            samples['last'], self.model,
-                                                                            self.actor,
-                                                                            self.critic if self.config.ENV_TYPE == Env.STARCRAFT
-                                                                            else self.old_critic,
-                                                                            self.config)
-        adv = returns.detach() - self.critic(imag_feat).detach()
-        if self.config.ENV_TYPE == Env.STARCRAFT:
-            adv = advantage(adv)
-        wandb.log({'Agent/Returns': returns.mean()})
-        for epoch in range(self.config.PPO_EPOCHS):
-            inds = np.random.permutation(actions.shape[0])
-            step = 2000
-            for i in range(0, len(inds), step):
-                self.cur_update += 1
-                idx = inds[i:i + step]
-                loss = actor_loss(imag_feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
-                                  old_policy[idx], adv[idx], self.actor, self.entropy)
-                actor_grad_norm = self.apply_optimizer(self.actor_optimizer, self.actor, loss, self.config.GRAD_CLIP_POLICY)
-                self.entropy *= self.config.ENTROPY_ANNEALING
-                val_loss = value_loss(self.critic, imag_feat[idx], returns[idx])
-                if np.random.randint(20) == 9:
-                    wandb.log({'Agent/val_loss': val_loss, 'Agent/actor_loss': loss})
-                critic_grad_norm = self.apply_optimizer(self.critic_optimizer, self.critic, val_loss, self.config.GRAD_CLIP_POLICY)
-                wandb.log({'Agent/actor_grad_norm': actor_grad_norm, 'Agent/critic_grad_norm': critic_grad_norm})
+    # def train_agent(self, samples):
+    #     actions, av_actions, old_policy, imag_feat, returns = actor_rollout(samples['observation'],
+    #                                                                         samples['action'],
+    #                                                                         samples['last'], self.model,
+    #                                                                         self.actor,
+    #                                                                         self.critic if self.config.ENV_TYPE == Env.STARCRAFT
+    #                                                                         else self.old_critic,
+    #                                                                         self.config)
+    #     adv = returns.detach() - self.critic(imag_feat).detach()
+    #     if self.config.ENV_TYPE == Env.STARCRAFT:
+    #         adv = advantage(adv)
+    #     wandb.log({'Agent/Returns': returns.mean()})
+    #     for epoch in range(self.config.PPO_EPOCHS):
+    #         inds = np.random.permutation(actions.shape[0])
+    #         step = 2000
+    #         for i in range(0, len(inds), step):
+    #             self.cur_update += 1
+    #             idx = inds[i:i + step]
+    #             loss = actor_loss(imag_feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
+    #                               old_policy[idx], adv[idx], self.actor, self.entropy)
+    #             actor_grad_norm = self.apply_optimizer(self.actor_optimizer, self.actor, loss, self.config.GRAD_CLIP_POLICY)
+    #             self.entropy *= self.config.ENTROPY_ANNEALING
+    #             val_loss = value_loss(self.critic, imag_feat[idx], returns[idx])
+    #             if np.random.randint(20) == 9:
+    #                 wandb.log({'Agent/val_loss': val_loss, 'Agent/actor_loss': loss})
+    #             critic_grad_norm = self.apply_optimizer(self.critic_optimizer, self.critic, val_loss, self.config.GRAD_CLIP_POLICY)
+    #             wandb.log({'Agent/actor_grad_norm': actor_grad_norm, 'Agent/critic_grad_norm': critic_grad_norm})
                 
-                if self.config.ENV_TYPE == Env.FLATLAND and self.cur_update % self.config.TARGET_UPDATE == 0:
-                    self.old_critic = deepcopy(self.critic)
+    #             if self.config.ENV_TYPE == Env.FLATLAND and self.cur_update % self.config.TARGET_UPDATE == 0:
+    #                 self.old_critic = deepcopy(self.critic)
 
     def apply_optimizer(self, opt, model, loss, grad_clip):
         opt.zero_grad()

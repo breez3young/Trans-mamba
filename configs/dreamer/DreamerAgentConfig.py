@@ -122,6 +122,10 @@ class DreamerConfig(Config):
         self.critic_FEAT = self.TRANS_EMBED_DIM # * self.nums_obs_token # self.TRANS_EMBED_DIM
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
 
+        ## debug
+        self.use_stack = True
+        self.stack_obs_num = 4
+
 
     def update(self):
         if self.use_bin:
@@ -146,10 +150,10 @@ class DreamerConfig(Config):
                 attn_pdrop=self.DROPOUT,
             )
 
-            self.FEAT = self.EMBED_DIM * self.nums_obs_token
+            self.FEAT = self.STOCHASTIC + self.DETERMINISTIC
+            # self.FEAT = self.EMBED_DIM * self.nums_obs_token
             self.critic_FEAT = self.TRANS_EMBED_DIM # * self.nums_obs_token # self.TRANS_EMBED_DIM
             self.GLOBAL_FEAT = self.FEAT + self.EMBED
-
 
 
 @dataclass

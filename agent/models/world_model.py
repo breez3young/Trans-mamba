@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
+from collections import deque
 
 from einops import rearrange, repeat
 import dataclasses
@@ -309,7 +310,31 @@ class MAWorldModel(nn.Module):
         return perattn_out
 
 
-def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs, initial_av_action):
+def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations, av_actions, filled, **kwargs):
+    use_stack = kwargs.get("use_stack", False)
+
+    init_obs = observations[:, -1].clone()
+    av_action = av_actions[:, -1].clone()
+
+    if use_stack:
+        stack_obs_num = kwargs.get("stack_obs_num", None)
+        assert stack_obs_num is not None and type(stack_obs_num) == int
+
+        stack_obs = deque(maxlen=stack_obs_num)
+        
+        bs = observations.shape[0]
+        tmp_obs = observations[:, :-1]
+        tmp_filled = filled[:, :-1]
+
+        for i in range(bs):
+            cur_obss = tmp_obs[i][tmp_filled[i] == True]
+            cur_rec_obss = wm_env.tokenizer.encode_decode(cur_obss, True, True)
+            tmp_obs[i][tmp_filled[i] == True] = cur_rec_obss
+
+        split_obs = torch.chunk(tmp_obs, 3, dim=1)
+        for ele in split_obs:
+            stack_obs.append(ele.squeeze(1))
+        
     actor_feats = []
     critic_feats = []
     actions = []
@@ -319,15 +344,20 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
     dones = []
 
     # initialize wm_env
-    rec_obs, critic_feat = wm_env.reset_from_initial_observations(initial_obs)
+    rec_obs, critic_feat = wm_env.reset_from_initial_observations(init_obs)
 
-    av_action = initial_av_action
     for t in range(horizons):
-        # feat = rearrange(wm_env.tokenizer.embedding(wm_env.obs_tokens), 'b n k e -> b n (k e)')
         # critic_feat = rearrange(wm_env.world_model.embedder.embedding_tables[1](wm_env.obs_tokens), 'b n k e -> b n (k e)')
 
         # action, pi = policy(feat)
-        action, pi = policy(rec_obs)
+        if use_stack:
+            stack_obs.append(rec_obs)
+            feat = rearrange(torch.stack(list(stack_obs), dim=0), 'm b n e -> b n (m e)')
+
+        else:
+            feat = rec_obs
+
+        action, pi = policy(feat)
 
         if av_action is not None:
             pi[av_action == 0] = -1e10
@@ -336,10 +366,10 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, initial_obs,
             av_actions.append(av_action.squeeze(0))
         
         # actor_feats.append(feat)
-        actor_feats.append(rec_obs)
+        actor_feats.append(feat)
         policies.append(pi)
         actions.append(action)
-        critic_feats.append(rec_obs) # critic_feat
+        critic_feats.append(feat)
 
         rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         

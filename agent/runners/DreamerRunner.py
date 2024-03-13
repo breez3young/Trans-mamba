@@ -38,6 +38,11 @@ class DreamerRunner:
 
         while True:
             rollout, info = self.server.run()
+            ent = rollout['entropy'].sum(0) / (rollout['entropy'] > 1e-4).sum(0)
+            ent_str = f""
+            for e in ent.tolist():
+                ent_str += f"{e:.4f} "
+
             cur_steps += info["steps_done"]
             cur_episode += 1
             save_interval_steps += info["steps_done"]
@@ -46,13 +51,13 @@ class DreamerRunner:
             wandb.log({'reward': info["reward"], 'steps': cur_steps})
             wandb.log({'returns': returns, "episodes": cur_episode})
 
-            print(cur_episode, cur_steps, info["reward"], 'Returns: %.4f' % returns)
+            print("%4s" % cur_episode, "%5s" % (cur_steps), info["reward"], 'Returns: %.4f' % returns, f"Entropy: {ent_str}", sep=' | ')
 
             self.learner.step(rollout)
 
             if (save_interval_steps - last_save_steps) > 10000:
                 self.learner.save(self.learner.config.RUN_DIR + f"/ckpt/model_{save_interval_steps // 1000}Ksteps.pth")
-                last_save_steps = save_interval_steps
+                last_save_steps = save_interval_steps // 10000 * 10000
 
             if cur_episode >= max_episodes or cur_steps >= max_steps:
                 break

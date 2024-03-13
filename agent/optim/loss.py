@@ -9,6 +9,7 @@ from agent.utils.params import FreezeParameters
 from networks.dreamer.rnns import rollout_representation, rollout_policy
 from agent.models.world_model import rollout_policy_trans
 from agent.models.world_model_env import MAWorldModelEnv
+from utils import symexp
 
 import ipdb
 
@@ -49,16 +50,40 @@ def model_loss(config, model, obs, action, av_action, reward, done, fake, last):
 # transformer imagination
 import sys
 from tqdm import tqdm
-def trans_actor_rollout(obs, av_actions, last, tokenizer, world_model, actor, critic, config):
+def trans_actor_rollout(obs, av_actions, filled, tokenizer, world_model, actor, critic, config, **kwargs):
+    # newly added
+    rew_model = kwargs.get("external_rew_model", None)
+    use_external_rew_model = (rew_model is not None)
+
+    use_stack = kwargs.get("use_stack", False)
+    stack_obs_num = kwargs.get("stack_obs_num", None)
+    # ----------
+
     n_agents = obs.shape[2]
     sequence_length = obs.shape[1]
     items_list = []
     with FreezeParameters([tokenizer, world_model]):
         wm_env = MAWorldModelEnv(tokenizer=tokenizer, world_model=world_model, device=config.DEVICE, env_name='sc2')       
+        # items = rollout_policy_trans(wm_env, actor, config.HORIZON,
+        #                              obs.reshape(-1, n_agents, obs.shape[-1]),
+        #                              av_actions.reshape(-1, n_agents, av_actions.shape[-1]),
+        #                              filled,
+        #                              use_stack = use_stack,
+        #                              stack_obs_num = stack_obs_num,
+        #                              )
         items = rollout_policy_trans(wm_env, actor, config.HORIZON,
-                                     obs.reshape(-1, n_agents, obs.shape[-1]),
-                                     av_actions.reshape(-1, n_agents, av_actions.shape[-1]))
-    
+                                     obs,
+                                     av_actions,
+                                     filled,
+                                     use_stack = use_stack,
+                                     stack_obs_num = stack_obs_num,
+                                     )
+
+    if use_external_rew_model:
+        with torch.no_grad():
+            new_rewards = rew_model(items["actor_feats"]).unsqueeze(-1)  # this is the no-repeating version
+            items['rewards'] = symexp(new_rewards)
+
     returns = trans_critic_rollout(critic, items['critic_feats'], items['rewards'], items['discounts'], config)
     output = [items["actions"][:-1].detach(),
               items["av_actions"][:-1].detach() if items["av_actions"] is not None else None,

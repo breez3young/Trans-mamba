@@ -67,5 +67,7 @@ class DreamerLearnerConfig(DreamerConfig):
         # /mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl
         self.load_path = "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl"
 
+        self.use_external_rew_model = False
+
     def create_learner(self):
         return DreamerLearner(self)

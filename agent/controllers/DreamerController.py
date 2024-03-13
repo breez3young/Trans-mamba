@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 from copy import deepcopy
 import random
 
@@ -22,6 +22,7 @@ class DreamerController:
         # self.model = DreamerModel(config).eval()
         # tokenizer
         config.update()
+        self.config = config
         # self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         # self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
@@ -44,8 +45,11 @@ class DreamerController:
         #                           config=config.trans_config, perattn_config=config.perattn_config, action_dim=config.ACTION_SIZE,
         #                           is_continuous=False).eval()
         # -------------------------
+        if not config.use_stack:
+            self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
 
-        self.actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
+        else:
+            self.actor = Actor(config.IN_DIM * config.stack_obs_num, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS)
         
         self.eps = config.epsilon
         
@@ -69,6 +73,13 @@ class DreamerController:
     def init_rnns(self):
         self.prev_rnn_state = None
         self.prev_actions = None
+        
+        if self.config.use_stack:
+            self.stack_obs = deque(maxlen=self.config.stack_obs_num)
+            for _ in range(self.config.stack_obs_num):
+                self.stack_obs.append(
+                    torch.zeros(1, self.config.NUM_AGENTS, self.config.IN_DIM)
+                )
 
     def dispatch_buffer(self):
         total_buffer = {k: np.asarray(v, dtype=np.float32) for k, v in self.buffer.items()}
@@ -102,11 +113,15 @@ class DreamerController:
             tokens = discretize_into_bins(observations, self.bins)
             feats = bins2continuous(tokens, self.bins)
 
+        if self.config.use_stack:
+            self.stack_obs.append(feats)
+            feats = rearrange(torch.cat(list(self.stack_obs), dim=0), 'b n e -> 1 n (b e)')
+
         action, pi = self.actor(feats)
         if avail_actions is not None:
             pi[avail_actions == 0] = -1e10  # logits
             probs = F.softmax(pi, -1)
-            ent = -((probs * torch.log2(probs)).sum(-1))            
+            ent = -((probs * torch.log2(probs + 1e-6)).sum(-1))            
             
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample()

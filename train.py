@@ -135,9 +135,9 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="0301_sc2",
-        group="(hard update)" + group_name + "interval=20_new",
+        group="(external rew_m)" + group_name,
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
-        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; hard update critic"
+        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; using external reward model"
     )
 
     exp = Experiment(steps=args.steps,
