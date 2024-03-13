@@ -2,6 +2,7 @@ debug_results
 test_results
 wandb
 results
+pretrained_weights
 __pycache__
 
 # Byte-compiled / optimized / DLL files

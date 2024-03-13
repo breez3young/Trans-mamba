@@ -4,6 +4,7 @@ from pathlib import Path
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
+import pickle
 import psutil
 import torch
 import torch.nn.functional as F
@@ -261,3 +262,42 @@ class MultiAgentEpisodesDataset(EpisodesDatasetRamMonitoring):
             batch[k] = torch.stack([e_s[k] for e_s in episodes_segments])
 
         return batch
+    
+    
+    def load_from_pkl(self, dataset_path):
+        '''
+        pre-loading buffer, but we filter out absorbing state
+        '''
+        # loading data
+        f = open(dataset_path, 'rb+')
+        data = pickle.load(f)
+        f.close()
+        
+        # preprocess data
+        valid_indices = np.argwhere(data["fakes"].all(-2).squeeze() == False).squeeze().tolist()
+        observations = data["observations"][valid_indices]
+        actions = data["actions"][valid_indices]
+        rewards = data["rewards"][valid_indices]
+        av_actions = data["av_actions"][valid_indices]
+        dones = data["dones"][valid_indices]
+        
+        num_steps = dones.shape[0]
+        
+        dones_indices = np.argwhere(dones.all(-2).squeeze() == True).squeeze().tolist()
+        start = 0
+        for idx in dones_indices:
+            episode = SC2Episode(
+                observation=torch.FloatTensor(observations[start : idx + 1]),
+                action=torch.FloatTensor(actions[start : idx + 1]),
+                av_action=torch.FloatTensor(av_actions[start : idx + 1]),
+                reward=torch.FloatTensor(rewards[start : idx + 1]),
+                done=torch.FloatTensor(dones[start : idx + 1]),
+                filled=torch.ones(idx + 1 - start, dtype=torch.bool)
+            )
+
+            self.add_episode(episode)
+            
+            start = idx + 1
+
+        print(f"{self.num_steps} environment steps have been loaded.")
+        print(f"{len(self.episodes)} episodes have been loaded.")

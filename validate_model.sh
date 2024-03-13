@@ -3,7 +3,7 @@ mawm_path="/mnt/data/optimal/zhangyang/code/bins/results/starcraft/2m_vs_1z/run1
 tokenizer="vq"
 
 # 2m_vs_1z model pth (seed 123): /mnt/data/optimal/zhangyang/code/mamba/mamba_results/starcraft/2m_vs_1z/run2/ckpt/mamba_model.pth
-mamba_path="/mnt/data/optimal/zhangyang/code/mamba/mamba_results/starcraft/2m_vs_1z/run2/ckpt/mamba_model.pth"
+34mamba_path="/mnt/data/optimal/zhangyang/code/mamba/mamba_results/starcraft/2m_vs_1z/run2/ckpt/mamba_model.pth"
 
 # 2m_vs_1z
 map_name="2m_vs_1z"

@@ -39,7 +39,7 @@ class DreamerLearnerConfig(DreamerConfig):
         # self.SEQ_LENGTH = 20
         self.SEQ_LENGTH = self.HORIZON
         self.N_SAMPLES = 1
-        self.TARGET_UPDATE = 1
+        self.TARGET_UPDATE = 20  # 1
         self.DEVICE = 'cuda'
         self.GRAD_CLIP = 100.0
         # self.HORIZON = 15
@@ -61,6 +61,11 @@ class DreamerLearnerConfig(DreamerConfig):
         self.wm_weight_decay = 0.01
 
         self.max_grad_norm = 10.0
+        
+        # debug
+        self.is_preload = False
+        # /mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl
+        self.load_path = "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl"
 
     def create_learner(self):
         return DreamerLearner(self)

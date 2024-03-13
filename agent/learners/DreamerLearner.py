@@ -103,6 +103,12 @@ class DreamerLearner:
         self.old_critic = deepcopy(self.critic)
         
         self.replay_buffer = MultiAgentEpisodesDataset(max_ram_usage="30G", name="train_dataset", temp=20)
+        
+        ## (debug) pre-load mamba training buffer
+        if self.config.is_preload:
+            self.replay_buffer.load_from_pkl(self.config.load_path)
+        
+        
         self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
                                                  config.DEVICE, config.ENV_TYPE)
 
@@ -302,18 +308,20 @@ class DreamerLearner:
                                     samples['done'], # samples['last']
                                     self.tokenizer, self.model,
                                     self.actor,
-                                    self.critic,
+                                    self.old_critic, # self.critic
                                     self.config)
         
         adv = returns.detach() - self.critic(critic_feat).detach()
         if self.config.ENV_TYPE == Env.STARCRAFT:
             adv = advantage(adv)
         wandb.log({'Agent/Returns': returns.mean()})
+        
+        self.cur_update += 1
+        
         for epoch in range(self.config.PPO_EPOCHS):
             inds = np.random.permutation(actions.shape[0])
             step = 2000
             for i in range(0, len(inds), step):
-                self.cur_update += 1
                 idx = inds[i:i + step]
                 loss = actor_loss(actor_feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
                                   old_policy[idx], adv[idx], self.actor, self.entropy)
@@ -325,9 +333,11 @@ class DreamerLearner:
                 critic_grad_norm = self.apply_optimizer(self.critic_optimizer, self.critic, val_loss, self.config.GRAD_CLIP_POLICY)
                 
                 wandb.log({'Agent/actor_grad_norm': actor_grad_norm, 'Agent/critic_grad_norm': critic_grad_norm})
-                
-                if self.config.ENV_TYPE == Env.FLATLAND and self.cur_update % self.config.TARGET_UPDATE == 0:
-                    self.old_critic = deepcopy(self.critic)
+        
+        # hard update critic
+        if self.cur_update % self.config.TARGET_UPDATE == 0:
+            self.old_critic = deepcopy(self.critic)
+            self.cur_update = 0
 
     def train_agent(self, samples):
         actions, av_actions, old_policy, imag_feat, returns = actor_rollout(samples['observation'],

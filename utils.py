@@ -439,3 +439,36 @@ def compute_compounding_errors(models, sample, horizons):
             + f"rew_l1_errors: {np.mean(c_mamba_errors['r_errors']):.4f}"
         )
     
+
+## initialize weights (mamba manner)
+def orthogonal_init(tensor, gain=1):
+    if tensor.ndimension() < 2:
+        raise ValueError("Only tensors with 2 or more dimensions are supported")
+
+    rows = tensor.size(0)
+    cols = tensor[0].numel()
+    flattened = tensor.new(rows, cols).normal_(0, 1)
+
+    if rows < cols:
+        flattened.t_()
+
+    # Compute the qr factorization
+    u, s, v = torch.svd(flattened, some=True)
+    if rows < cols:
+        u.t_()
+    q = u if tuple(u.shape) == (rows, cols) else v
+    with torch.no_grad():
+        tensor.view_as(q).copy_(q)
+        tensor.mul_(gain)
+    return tensor
+
+
+def initialize_weights(mod, scale=1.0, mode='ortho'):
+    for p in mod.parameters():
+        if mode == 'ortho':
+            if len(p.data.shape) >= 2:
+                orthogonal_init(p.data, gain=scale)
+        elif mode == 'xavier':
+            if len(p.data.shape) >= 2:
+                torch.nn.init.xavier_uniform_(p.data)
+    

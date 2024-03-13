@@ -18,7 +18,7 @@ from .transformer import Transformer, TransformerConfig, get_sinusoid_encoding_t
 from .transformer import Perceiver, PerceiverConfig
 
 from .world_model_env import MAWorldModelEnv
-from utils import init_weights, action_split_into_bins, discretize_into_bins
+from utils import init_weights, action_split_into_bins, discretize_into_bins, initialize_weights
 import wandb
 import ipdb
 
@@ -112,7 +112,7 @@ class MAWorldModel(nn.Module):
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ELU(),
-                nn.Linear(config.embed_dim, 1), # 这里改成了二元的termination预测
+                nn.Linear(config.embed_dim, 1),
             )
         )
 
@@ -142,6 +142,11 @@ class MAWorldModel(nn.Module):
         # )
 
         self.apply(init_weights)
+        
+        initialize_weights(self.head_rewards, mode='xavier')
+        # initialize_weights(self.head_ends, mode='xavier')
+        # initialize_weights(self.heads_avail_actions, mode='xavier')
+        
         self.use_ib = True # use iris databuffer 
 
     def __repr__(self) -> str:

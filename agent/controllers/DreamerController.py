@@ -4,6 +4,7 @@ import random
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.distributions import OneHotCategorical
 from einops import rearrange
 
@@ -14,7 +15,6 @@ from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
 from networks.dreamer.action import Actor
 from utils import discretize_into_bins, bins2continuous
 
-import ipdb
 
 class DreamerController:
 
@@ -104,7 +104,10 @@ class DreamerController:
 
         action, pi = self.actor(feats)
         if avail_actions is not None:
-            pi[avail_actions == 0] = -1e10
+            pi[avail_actions == 0] = -1e10  # logits
+            probs = F.softmax(pi, -1)
+            ent = -((probs * torch.log2(probs)).sum(-1))            
+            
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample()
 
@@ -113,7 +116,7 @@ class DreamerController:
             action_dist = OneHotCategorical(probs=avail_actions / avail_actions.sum(-1, keepdim=True))
             action = action_dist.sample()
         
-        return action.squeeze(0).clone()
+        return action.squeeze(0).clone(), ent.squeeze(0).clone()
 
     def advance_rnns(self, state):
         self.prev_rnn_state = deepcopy(state)
