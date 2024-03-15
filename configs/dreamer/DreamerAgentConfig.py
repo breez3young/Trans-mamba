@@ -123,7 +123,7 @@ class DreamerConfig(Config):
         self.GLOBAL_FEAT = self.FEAT + self.EMBED
 
         ## debug
-        self.use_stack = True
+        self.use_stack = False
         self.stack_obs_num = 4
 
 

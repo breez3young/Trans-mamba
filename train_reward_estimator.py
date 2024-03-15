@@ -25,7 +25,10 @@ class ObsRewardDataset(Dataset):
         valid_indices = np.argwhere(data["fakes"].all(-2).squeeze() == False).squeeze().tolist()
         self.rewards = data['rewards'][valid_indices]
         self.observations = data['observations'][valid_indices]
+        self.actions = data['actions'][valid_indices]
+        
         self.obs_dim = self.observations.shape[-1]
+        self.action_dim = self.actions.shape[-1]
         self.n_agents = self.observations.shape[-2]
         
         assert self.rewards.shape[0] == self.observations.shape[0]
@@ -41,7 +44,7 @@ class ObsRewardDataset(Dataset):
         return self.rewards.shape[0]
     
     def __getitem__(self, index):
-        return self.observations[index], self.rewards[index].mean(-2)
+        return self.observations[index], self.actions[index], self.rewards[index].mean(-2)
     
     
 #### ---------------------
@@ -90,6 +93,9 @@ def get_args_parser():
 
 def main(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    ckpt_path = Path("pretrained_weights") / f'ckpt' / datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+    ckpt_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Load Offline Dataset
     data_path = "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl"
@@ -123,7 +129,7 @@ def main(args):
     tokenizer = SimpleVQAutoEncoder(in_dim=dataset.obs_dim, embed_dim=32, num_tokens=16,
                                     codebook_size=512, learnable_codebook=False, ema_update=True, decay=0.8).to(device)
     
-    model = Reward_estimator(in_dim=dataset.obs_dim,
+    model = Reward_estimator(in_dim=dataset.obs_dim + dataset.action_dim,
                              hidden_size=256, n_agents=dataset.n_agents).to(device)
     initialize_weights(model, mode='xavier')
 
@@ -142,12 +148,13 @@ def main(args):
         
         pbar = tqdm(enumerate(train_loader), total=len(train_loader))
         loss_aver = 0.
-        for it, (obs, rew) in pbar:
+        for it, (obs, act, rew) in pbar:
             obs = obs.to(device)
+            act = act.to(device)
             rew = rew.to(device)
             
             out, indices, cmt_loss = tokenizer(obs, True, True)
-            pred_rew = model(out)
+            pred_rew = model(out, act)
             
             # loss = F.smooth_l1_loss(pred_rew, rew)
             rec_loss = (out - obs).abs().mean()
@@ -177,13 +184,14 @@ def main(args):
         tokenizer.eval()
         
         loss_eval_aver = 0.
-        for it, (obs, rew) in enumerate(test_loader):
+        for it, (obs, act, rew) in enumerate(test_loader):
             with torch.no_grad():
                 obs = obs.to(device)
+                act = act.to(device)
                 rew = rew.to(device)
                 
                 rec = tokenizer.encode_decode(obs, True, True)
-                pred_rew = model(rec)
+                pred_rew = model(rec, act)
                 
                 eval_loss = F.smooth_l1_loss(pred_rew, rew) + (rec - obs).abs().mean()
 
@@ -193,9 +201,6 @@ def main(args):
 
         if loss_eval_aver < best_loss:
             best_loss = loss_eval_aver
-
-            ckpt_path = Path("pretrained_weights") / f'ckpt' / datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
-            ckpt_path.mkdir(parents=True, exist_ok=True)
             to_save = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),

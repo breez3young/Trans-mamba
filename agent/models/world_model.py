@@ -10,6 +10,12 @@ import torch.distributions as td
 import torch.nn.functional as F
 from torch.distributions import OneHotCategorical
 
+# for visualization
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
 # from dataset import Batch
 from .kv_caching import KeysValues
 from .slicer import Embedder, Head, Slicer
@@ -41,6 +47,8 @@ class MAWorldModel(nn.Module):
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.use_bin = use_bin
         self.bins = bins
+        
+        self.num_modalities = 3
 
         self.config = config
         self.num_agents = num_agents
@@ -59,9 +67,11 @@ class MAWorldModel(nn.Module):
 
         act_tokens_pattern = torch.zeros(config.tokens_per_block)
         act_tokens_pattern[-num_action_tokens:] = 1
+        self.act_tokens_pattern = act_tokens_pattern
 
         obs_tokens_pattern = torch.zeros(config.tokens_per_block)
         obs_tokens_pattern[:self.num_obs_tokens] = 1
+        self.obs_tokens_pattern = obs_tokens_pattern
         
         ### for autoregressive manner
         obs_autoregress_pattern = obs_tokens_pattern.clone()
@@ -74,6 +84,7 @@ class MAWorldModel(nn.Module):
         ### Perceiver Attention output pattern
         perattn_pattern = torch.zeros(config.tokens_per_block)
         perattn_pattern[-num_action_tokens - 1 : -num_action_tokens] = 1
+        self.perattn_pattern = perattn_pattern
 
         # self.obs_embeddings_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
         self.perattn_slicer = Slicer(max_blocks=config.max_blocks, block_mask=perattn_pattern)
@@ -154,7 +165,7 @@ class MAWorldModel(nn.Module):
     def __repr__(self) -> str:
         return "multi_agent_world_model"
 
-    def forward(self, tokens: torch.LongTensor, perattn_out: torch.Tensor = None, past_keys_values: Optional[KeysValues] = None) -> MAWorldModelOutput:
+    def forward(self, tokens: torch.LongTensor, perattn_out: torch.Tensor = None, past_keys_values: Optional[KeysValues] = None, return_attn: bool = False) -> MAWorldModelOutput:
         bs = tokens.size(0)
         num_steps = tokens.size(1)  # (B, T)
 
@@ -172,8 +183,7 @@ class MAWorldModel(nn.Module):
 
         sequences += self.pos_emb(prev_steps + torch.arange(num_steps, device=tokens.device))
 
-        x, attn_output = self.transformer(sequences, past_keys_values)
-        ipdb.set_trace()
+        x, attn_output = self.transformer(sequences, past_keys_values, return_attn = return_attn)
 
         logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
 
@@ -314,29 +324,84 @@ class MAWorldModel(nn.Module):
     
     ### visualize attention map
     @torch.no_grad()
-    def visualize_attn(self, sample, tokenizer):
+    def visualize_attn(self, sample, tokenizer, save_dir):
+        # preliminary
         device = sample["observation"].device
+        n_agents = sample['observation'].shape[-2]
+        horizon = sample['observation'].shape[-3]
+        obs_token_indices = rearrange(repeat(self.obs_tokens_pattern, 'n -> h n', h=horizon), 'h n -> (h n)')
+        obs_token_indices = (obs_token_indices == 1).nonzero().squeeze().numpy()
+        act_token_indices = rearrange(repeat(self.act_tokens_pattern, 'n -> h n', h=horizon), 'h n -> (h n)')
+        act_token_indices = (act_token_indices == 1).nonzero().squeeze().numpy()
+        perattn_indices = rearrange(repeat(self.perattn_pattern, 'n -> h n', h=horizon), 'h n -> (h n)')
+        perattn_indices = (perattn_indices == 1).nonzero().squeeze().numpy()
+        
+        save_dir.mkdir(parents=True, exist_ok=True)
+        for agent_id in range(n_agents):
+            tmp_dir = save_dir / f"agent_{agent_id}"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
         
         _, obs_tokens = tokenizer.encode(sample['observation'], should_preprocess=True)
         obs_tokens = obs_tokens.to(torch.long)
-        
         act_tokens = torch.argmax(sample['action'], dim=-1, keepdim=True)
         
-        ipdb.set_trace()
         perattn_out = self.get_perceiver_attn_out(obs_tokens, act_tokens)
+        b, l, n, e = perattn_out.shape
+        perattn_out = rearrange(perattn_out, 'b l n e -> (b n) l e', b=b, l=l, n=n)
         
         tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1)
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
 
-        ipdb.set_trace()
-        outputs = self(tokens, perattn_out = perattn_out)
-        # obs_encodings = self.embedder.embedding_tables[1](obs_tokens)
-        # action_encodings = self.embedder.embedding_tables[0](act_tokens)
-        # input_encodings = torch.cat([obs_encodings, action_encodings], dim=-2)
+        outputs = self(tokens, perattn_out = perattn_out, return_attn=True)
         
-        # agent_id_emb = repeat(self.agent_id_pos_emb[:, :self.num_agents], '1 n e -> (b l) (n m) e', b = b, l = l, m = M)
-        # input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) (n m) e') + agent_id_emb.detach().to(device)
+        attn_output = outputs.attn_output
         
+        # define custom cmap
+        modality_colors = ["Oranges", "Greens", "Blues"]
+        colors = []
+        for color in modality_colors:
+            cmap = mpl.colormaps[color]
+            colors.append(
+                cmap(np.linspace(0., 1., 333))
+            )
+            
+        white_cmap = LinearSegmentedColormap.from_list("white", [(0., 'white'), (1., 'white')], N=1)
+        colors.append(
+            white_cmap(np.linspace(0., 1., 1))
+        )
+            
+        custom_cmap = LinearSegmentedColormap.from_list("custom_cmap", np.vstack(colors))
+        red_cmap = mpl.colormaps["Oranges"]
+        
+        def save_matrix_as_image(matrix, filename, custom_cmap):
+            plt.imshow(matrix, cmap=custom_cmap, vmin=0, vmax=1)
+            # plt.colorbar(orientation="horizontal")
+            
+            plt.axis("off")
+            plt.savefig(filename, bbox_inches="tight", pad_inches=0.1, dpi=600)
+            plt.close()
+        
+        ## save as image
+        scale = 0.332
+        for layer_id in range(len(attn_output)):
+            attn_weight = attn_output[layer_id].cpu().numpy()
+            attn_weight[:, :, obs_token_indices] *= scale
+            
+            attn_weight[:, :, perattn_indices] *= scale
+            attn_weight[:, :, perattn_indices] += 0.333
+            
+            attn_weight[:, :, act_token_indices] *= scale
+            attn_weight[:, :, act_token_indices] += 0.666
+            
+            attn_weight = np.where(np.tril(np.ones_like(attn_weight)) == 1, attn_weight, np.zeros_like(attn_weight) + 0.9995)
+            
+            for agent_id in range(attn_weight.shape[0]):
+                for head_id in range(attn_weight.shape[1]):
+                    save_matrix_as_image(attn_weight[agent_id, head_id],
+                                         save_dir / f"agent_{agent_id}" / f"layer{layer_id}_head{head_id}.png",
+                                         custom_cmap)
+        
+        print(f"Attention visualization has been saved to {str(save_dir)}.") 
 
 
 def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations, av_actions, filled, **kwargs):
@@ -410,5 +475,4 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations
             "rewards": torch.stack(rewards, dim=0),
             "discounts": torch.stack(dones, dim=0),
             }
-        
         

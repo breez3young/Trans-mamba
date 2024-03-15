@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -12,7 +13,9 @@ class Reward_estimator(nn.Module):
         self.ln = nn.LayerNorm(in_dim * n_agents)
         self.feedforward_model = build_model(in_dim * n_agents, 1, 3, hidden_size, activation)
 
-    def forward(self, obss):
-        obss = obss.reshape(*obss.shape[:-2], -1)
-        obss = self.ln(obss)
-        return self.feedforward_model(obss)
+    def forward(self, obss, actions):
+        cat_feats = torch.cat([obss, actions], dim=-1)
+        feats = cat_feats.reshape(*cat_feats.shape[:-2], -1)
+        
+        feats = self.ln(feats)
+        return self.feedforward_model(feats)

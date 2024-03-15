@@ -15,8 +15,6 @@ from torch.nn import functional as F
 
 from .kv_caching import KeysValues, KVCache
 
-import ipdb
-
 @dataclass
 class TransformerConfig:
     tokens_per_block: int
@@ -287,7 +285,6 @@ class SelfAttention(nn.Module):
             kv_cache.update(k, v)
             k, v = kv_cache.get()
 
-        ipdb.set_trace()
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask[L:L + T, :L + T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)

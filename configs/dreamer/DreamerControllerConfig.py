@@ -10,6 +10,8 @@ class DreamerControllerConfig(DreamerConfig):
         self.EXPL_DECAY = 0.9999
         self.EXPL_NOISE = 0.
         self.EXPL_MIN = 0.
+        
+        self.temperature = 1.
 
     def create_controller(self):
         return DreamerController(self)

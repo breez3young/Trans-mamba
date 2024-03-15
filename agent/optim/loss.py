@@ -81,7 +81,7 @@ def trans_actor_rollout(obs, av_actions, filled, tokenizer, world_model, actor, 
 
     if use_external_rew_model:
         with torch.no_grad():
-            new_rewards = rew_model(items["actor_feats"]).unsqueeze(-1)  # this is the no-repeating version
+            new_rewards = rew_model(items["actor_feats"], items["actions"]).unsqueeze(-1)  # this is the no-repeating version
             items['rewards'] = symexp(new_rewards)
 
     returns = trans_critic_rollout(critic, items['critic_feats'], items['rewards'], items['discounts'], config)

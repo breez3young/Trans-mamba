@@ -61,6 +61,7 @@ class DreamerController:
 
         self.use_bin = config.use_bin
         self.bins = config.bins
+        self.temp = config.temperature
 
     def receive_params(self, params):
         self.tokenizer.load_state_dict(params['tokenizer'])
@@ -120,6 +121,8 @@ class DreamerController:
         action, pi = self.actor(feats)
         if avail_actions is not None:
             pi[avail_actions == 0] = -1e10  # logits
+            pi = pi / self.temp  # softmax temperature
+            
             probs = F.softmax(pi, -1)
             ent = -((probs * torch.log2(probs + 1e-6)).sum(-1))            
             

@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument('--mode', type=str, default='disabled')
     parser.add_argument('--tokenizer', type=str, default='vq')
     parser.add_argument('--decay', type=float, default=0.8)
+    parser.add_argument('--temperature', type=float, default=1.)
     return parser.parse_args()
 
 
@@ -103,9 +104,11 @@ if __name__ == "__main__":
     configs["controller_config"].tokenizer_type = args.tokenizer
     configs["learner_config"].ema_decay = args.decay
     configs["controller_config"].ema_decay = args.decay
+    
+    configs["controller_config"].temperature = args.temperature
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/test_results") / args.env / (args.env_name + f"_{args.tokenizer}")
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -137,9 +140,9 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="0301_sc2",
-        group="(stack)" + group_name + f"_stack_num={configs['learner_config'].stack_obs_num}",
+        group="(temperature)" + group_name + f"_temp={configs['controller_config'].temperature}",
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
-        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; using stack observations"
+        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; no using stack observations"
     )
 
     exp = Experiment(steps=args.steps,

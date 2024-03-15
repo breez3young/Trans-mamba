@@ -117,10 +117,10 @@ class DreamerLearner:
         if self.config.use_external_rew_model:
             from networks.dreamer.reward_estimator import Reward_estimator
 
-            pretrained_rew_model_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/ckpt/2024-03-14_11-34-53-385/rew_model_ep40.pth"
+            pretrained_rew_model_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/ckpt/2024-03-15_13-53-32-722/rew_model_ep113.pth"
             print(f"Load pretrained reward model from {pretrained_rew_model_path}")
 
-            self.rew_model = Reward_estimator(in_dim=config.IN_DIM, hidden_size=256, n_agents=config.NUM_AGENTS).to(config.DEVICE)
+            self.rew_model = Reward_estimator(in_dim=config.IN_DIM + config.ACTION_SIZE, hidden_size=256, n_agents=config.NUM_AGENTS).to(config.DEVICE)
             checkpoint = torch.load(pretrained_rew_model_path)
             self.rew_model.load_state_dict(checkpoint['model'])
             self.rew_model.eval()
@@ -139,7 +139,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = False
+        self.tqdm_vis = True
 
         if self.config.use_bin:
             print('Not using & training tokenizer...')
@@ -217,10 +217,10 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 6:
+        if self.train_count == 20:
             print('Start training world model...')
 
-        if self.train_count > 5:
+        if self.train_count > 19:
             # train transformer-based world model
             pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
             for i in pbar:
@@ -242,10 +242,10 @@ class DreamerLearner:
                     + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
                 )
 
-        if self.train_count == 6:
+        if self.train_count == 45:
             print('Start training actor & critic...')
 
-        if self.train_count > 5:
+        if self.train_count > 44:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
@@ -257,15 +257,14 @@ class DreamerLearner:
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         
-        if self.train_count > 5 and self.train_count % 15 == 0:
+        if self.train_count % 20 == 0 and self.train_count > 19:
             self.tokenizer.eval()
-            
             sample = self.replay_buffer.sample_batch(batch_num_samples=1,
                                                      sequence_length=self.config.HORIZON,
                                                      sample_from_start=True,
                                                      valid_sample=True)
-            
-            self.model.visualize_attn(sample, self.tokenizer)
+            sample = self._to_device(sample)
+            self.model.visualize_attn(sample, self.tokenizer, Path(self.config.RUN_DIR) / "visualization" / "attn" / f"epoch_{self.train_count}")
         
         self.cur_wandb_epoch += 1
     
