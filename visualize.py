@@ -2,11 +2,14 @@ import argparse
 import os
 import shutil
 import torch
+
+from einops import rearrange
 from torch.distributions.one_hot_categorical import OneHotCategorical
 from pathlib import Path
 from utils import load_mamba_model, load_mawm_model, _wrap
 from smac.env import StarCraft2Env
 from copy import deepcopy
+from collections import deque
 import numpy as np
 import logging
 
@@ -129,6 +132,13 @@ if __name__ == "__main__":
         replay_prefix = "mawm"
         model = load_mawm_model(configs["learner_config"], args.model_path)
         
+        if configs["learner_config"].use_stack:
+            stack_obs = deque(maxlen=configs["learner_config"].stack_obs_num)
+            for _ in range(configs["learner_config"].stack_obs_num):
+                stack_obs.append(
+                    torch.zeros(configs["learner_config"].NUM_AGENTS, configs["learner_config"].IN_DIM, device=configs["learner_config"].DEVICE)
+                )
+        
         @torch.no_grad()
         def select_actions(obser, avail_action):
             if not configs["learner_config"].use_bin:
@@ -137,7 +147,13 @@ if __name__ == "__main__":
                 tokens = discretize_into_bins(obser, configs["learner_config"].bins)
                 feats = bins2continuous(tokens, configs["learner_config"].bins)
             
-            action, pi = actor(feats)
+            if configs["learner_config"].use_stack:
+                stack_obs.append(feats)
+                feat = rearrange(torch.stack(list(stack_obs), dim=0), 'b n e -> n (b e)')
+            else:
+                feat = feats
+            
+            action, pi = actor(feat)
             pi[avail_action == 0] = -1e10
             action_dist = OneHotCategorical(logits=pi)
             action = action_dist.sample()

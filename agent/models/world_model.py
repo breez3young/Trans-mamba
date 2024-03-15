@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, List
 from collections import deque
 
 from einops import rearrange, repeat
@@ -30,6 +30,7 @@ class MAWorldModelOutput:
     pred_rewards: torch.FloatTensor
     logits_ends: torch.FloatTensor
     pred_avail_action: torch.FloatTensor
+    attn_output: List
 
 
 class MAWorldModel(nn.Module):
@@ -171,7 +172,8 @@ class MAWorldModel(nn.Module):
 
         sequences += self.pos_emb(prev_steps + torch.arange(num_steps, device=tokens.device))
 
-        x = self.transformer(sequences, past_keys_values)
+        x, attn_output = self.transformer(sequences, past_keys_values)
+        ipdb.set_trace()
 
         logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
 
@@ -187,7 +189,7 @@ class MAWorldModel(nn.Module):
         logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
-        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action)
+        return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, attn_output=attn_output)
 
     def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any):
         device = batch['observation'].device
@@ -308,6 +310,33 @@ class MAWorldModel(nn.Module):
 
         perattn_out = perattn_out.reshape(*shape[:-1], -1)
         return perattn_out
+    
+    
+    ### visualize attention map
+    @torch.no_grad()
+    def visualize_attn(self, sample, tokenizer):
+        device = sample["observation"].device
+        
+        _, obs_tokens = tokenizer.encode(sample['observation'], should_preprocess=True)
+        obs_tokens = obs_tokens.to(torch.long)
+        
+        act_tokens = torch.argmax(sample['action'], dim=-1, keepdim=True)
+        
+        ipdb.set_trace()
+        perattn_out = self.get_perceiver_attn_out(obs_tokens, act_tokens)
+        
+        tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1)
+        tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
+
+        ipdb.set_trace()
+        outputs = self(tokens, perattn_out = perattn_out)
+        # obs_encodings = self.embedder.embedding_tables[1](obs_tokens)
+        # action_encodings = self.embedder.embedding_tables[0](act_tokens)
+        # input_encodings = torch.cat([obs_encodings, action_encodings], dim=-2)
+        
+        # agent_id_emb = repeat(self.agent_id_pos_emb[:, :self.num_agents], '1 n e -> (b l) (n m) e', b = b, l = l, m = M)
+        # input_encodings = rearrange(input_encodings, 'b l n m e -> (b l) (n m) e') + agent_id_emb.detach().to(device)
+        
 
 
 def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations, av_actions, filled, **kwargs):
@@ -322,18 +351,15 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations
 
         stack_obs = deque(maxlen=stack_obs_num)
         
-        bs = observations.shape[0]
-        tmp_obs = observations[:, :-1]
-        tmp_filled = filled[:, :-1]
+        tmp_obs = observations[:, :-1].clone()
+        tmp_filled = filled[:, :-1, None, None].clone().repeat(1, 1, *tmp_obs.shape[-2:])
+        
+        unvalid_obs = torch.zeros_like(tmp_obs, device=tmp_obs.device)
+        tmp_obs = wm_env.tokenizer.encode_decode(tmp_obs, True, True)
+        tmp_obs = torch.where(tmp_filled == True, tmp_obs, unvalid_obs)
 
-        for i in range(bs):
-            cur_obss = tmp_obs[i][tmp_filled[i] == True]
-            cur_rec_obss = wm_env.tokenizer.encode_decode(cur_obss, True, True)
-            tmp_obs[i][tmp_filled[i] == True] = cur_rec_obss
-
-        split_obs = torch.chunk(tmp_obs, 3, dim=1)
-        for ele in split_obs:
-            stack_obs.append(ele.squeeze(1))
+        for index in range(stack_obs_num - 1):
+            stack_obs.append(tmp_obs[:, index])
         
     actor_feats = []
     critic_feats = []

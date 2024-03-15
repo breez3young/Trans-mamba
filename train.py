@@ -105,7 +105,7 @@ if __name__ == "__main__":
     configs["controller_config"].ema_decay = args.decay
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/debug_results") / args.env / (args.env_name + f"_{args.tokenizer}")
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/test_results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -123,6 +123,8 @@ if __name__ == "__main__":
 
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "agent"), dst=run_dir / "agent")
     shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "configs"), dst=run_dir / "configs")
+    
+    print(f"Run files are saved at {str(run_dir)}")
     # -------------------
 
     configs["learner_config"].RUN_DIR = str(run_dir)
@@ -135,9 +137,9 @@ if __name__ == "__main__":
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
         project="0301_sc2",
-        group="(external rew_m)" + group_name,
+        group="(stack)" + group_name + f"_stack_num={configs['learner_config'].stack_obs_num}",
         name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
-        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; using external reward model"
+        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; using stack observations"
     )
 
     exp = Experiment(steps=args.steps,

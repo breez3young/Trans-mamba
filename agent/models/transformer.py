@@ -212,14 +212,20 @@ class Transformer(nn.Module):
         device = self.ln_f.weight.device  # Assumption that all submodules are on the same device
         return KeysValues(n, self.config.num_heads, max_tokens, self.config.embed_dim, self.config.num_layers, device)
 
-    def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None) -> torch.Tensor:
+    def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None, return_attn: bool = False) -> torch.Tensor:
         assert past_keys_values is None or len(past_keys_values) == len(self.blocks)
+        attn_output = [] if return_attn else None
+        
         x = self.drop(sequences)
         for i, block in enumerate(self.blocks):
-            x = block(x, None if past_keys_values is None else past_keys_values[i])
+            x, attn_weights = block(x, None if past_keys_values is None else past_keys_values[i],
+                                    return_attn = return_attn)
+            
+            if return_attn:
+                attn_output.append(attn_weights)
 
         x = self.ln_f(x)
-        return x
+        return x, attn_output
 
 
 class Block(nn.Module):
@@ -235,11 +241,13 @@ class Block(nn.Module):
             nn.Dropout(config.resid_pdrop),
         )
 
-    def forward(self, x: torch.Tensor, past_keys_values: Optional[KeysValues] = None) -> torch.Tensor:
-        x_attn = self.attn(self.ln1(x), past_keys_values)
+    def forward(self, x: torch.Tensor, past_keys_values: Optional[KeysValues] = None,
+                return_attn: bool = False) -> torch.Tensor:
+        x_attn, attn_weights = self.attn(self.ln1(x), past_keys_values,
+                                         return_attn = return_attn)
         x = x + x_attn
         x = x + self.mlp(self.ln2(x))
-        return x
+        return x, attn_weights
 
 
 class SelfAttention(nn.Module):
@@ -262,7 +270,8 @@ class SelfAttention(nn.Module):
         block_causal_mask = torch.max(causal_mask, torch.block_diag(*[torch.ones(config.tokens_per_block, config.tokens_per_block) for _ in range(config.max_blocks)]))
         self.register_buffer('mask', causal_mask if config.attention == 'causal' else block_causal_mask)
 
-    def forward(self, x: torch.Tensor, kv_cache: Optional[KVCache] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, kv_cache: Optional[KVCache] = None,
+                return_attn: bool = False) -> torch.Tensor:
         B, T, C = x.size()
         if kv_cache is not None:
             b, nh, L, c = kv_cache.shape
@@ -278,13 +287,20 @@ class SelfAttention(nn.Module):
             kv_cache.update(k, v)
             k, v = kv_cache.get()
 
+        ipdb.set_trace()
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask[L:L + T, :L + T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
+        
+        if return_attn:
+            attn_weights = att.detach().clone()
+        else:
+            attn_weights = None
+        
         att = self.attn_drop(att)
         y = att @ v
         y = rearrange(y, 'b h t e -> b t (h e)')
 
         y = self.resid_drop(self.proj(y))
 
-        return y
+        return y, attn_weights

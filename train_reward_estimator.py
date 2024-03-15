@@ -6,10 +6,12 @@ import torch.nn.functional as F
 
 from tqdm import tqdm
 from pathlib import Path
+from datetime import datetime
 from torch.utils.data import Dataset, random_split
 from torch.utils.data.dataloader import DataLoader
 
 from networks.dreamer.reward_estimator import Reward_estimator
+from agent.models.vq import SimpleVQAutoEncoder, SimpleFSQAutoEncoder
 
 import ipdb
 
@@ -118,12 +120,16 @@ def main(args):
     )
     
     # 2. Initialize model and optimizer
+    tokenizer = SimpleVQAutoEncoder(in_dim=dataset.obs_dim, embed_dim=32, num_tokens=16,
+                                    codebook_size=512, learnable_codebook=False, ema_update=True, decay=0.8).to(device)
+    
     model = Reward_estimator(in_dim=dataset.obs_dim,
                              hidden_size=256, n_agents=dataset.n_agents).to(device)
     initialize_weights(model, mode='xavier')
 
     lr = 3e-4
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    params = list(tokenizer.parameters()) + list(model.parameters())
+    optimizer = torch.optim.Adam(params, lr=lr)
     
     # 3. Train reward model
     best_loss = float('inf')
@@ -132,22 +138,35 @@ def main(args):
         
         ## Training
         model.train()
+        tokenizer.train()
+        
         pbar = tqdm(enumerate(train_loader), total=len(train_loader))
         loss_aver = 0.
         for it, (obs, rew) in pbar:
             obs = obs.to(device)
             rew = rew.to(device)
             
-            pred_rew = model(obs)
+            out, indices, cmt_loss = tokenizer(obs, True, True)
+            pred_rew = model(out)
+            
             # loss = F.smooth_l1_loss(pred_rew, rew)
-            loss = torch.abs(pred_rew - rew).mean()
+            rec_loss = (out - obs).abs().mean()
+            rew_loss = F.smooth_l1_loss(pred_rew, rew)
+            
+            active_rate = indices.detach().unique().numel() / 512 * 100
+            
+            loss = rec_loss + rew_loss + 10. * cmt_loss
 
             ### Back-propagation
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            pbar.set_description(f"Epoch {epoch + 1} it {it}: L1 loss {loss.item():.4f}")
+            pbar.set_description(f"Epoch {epoch + 1} it {it}: "
+                                 + f"rec loss {rec_loss.item():.4f} | "
+                                 + f"rew loss {rew_loss.item():.4f} | "
+                                 + f"cmt loss {cmt_loss.item():.4f} | "
+                                 + f"active %: {active_rate}")
 
             loss_aver += loss.item()
         
@@ -155,14 +174,18 @@ def main(args):
 
         ## Evaluation
         model.eval()
+        tokenizer.eval()
+        
         loss_eval_aver = 0.
         for it, (obs, rew) in enumerate(test_loader):
             with torch.no_grad():
                 obs = obs.to(device)
                 rew = rew.to(device)
                 
-                pred_rew = model(obs)
-                eval_loss = torch.abs(pred_rew - rew).mean()
+                rec = tokenizer.encode_decode(obs, True, True)
+                pred_rew = model(rec)
+                
+                eval_loss = F.smooth_l1_loss(pred_rew, rew) + (rec - obs).abs().mean()
 
                 loss_eval_aver += eval_loss.item()
 
@@ -171,7 +194,7 @@ def main(args):
         if loss_eval_aver < best_loss:
             best_loss = loss_eval_aver
 
-            ckpt_path = Path("pretrained_weights") / f'ckpt'
+            ckpt_path = Path("pretrained_weights") / f'ckpt' / datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
             ckpt_path.mkdir(parents=True, exist_ok=True)
             to_save = {
                 'model': model.state_dict(),

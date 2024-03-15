@@ -117,7 +117,7 @@ class DreamerLearner:
         if self.config.use_external_rew_model:
             from networks.dreamer.reward_estimator import Reward_estimator
 
-            pretrained_rew_model_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/ckpt/rew_model_ep60.pth"
+            pretrained_rew_model_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/ckpt/2024-03-14_11-34-53-385/rew_model_ep40.pth"
             print(f"Load pretrained reward model from {pretrained_rew_model_path}")
 
             self.rew_model = Reward_estimator(in_dim=config.IN_DIM, hidden_size=256, n_agents=config.NUM_AGENTS).to(config.DEVICE)
@@ -139,7 +139,7 @@ class DreamerLearner:
         self.n_agents = 2
         Path(config.LOG_FOLDER).mkdir(parents=True, exist_ok=True)
 
-        self.tqdm_vis = True
+        self.tqdm_vis = False
 
         if self.config.use_bin:
             print('Not using & training tokenizer...')
@@ -189,7 +189,7 @@ class DreamerLearner:
         if not self.config.use_bin:
             pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
             for i in pbar:
-                samples = self.replay_buffer.sample_batch(batch_num_samples=512,
+                samples = self.replay_buffer.sample_batch(batch_num_samples=256,
                                                           sequence_length=1,
                                                           sample_from_start=True)
                 samples = self._to_device(samples)
@@ -217,10 +217,10 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 21:
+        if self.train_count == 6:
             print('Start training world model...')
 
-        if self.train_count > 20:
+        if self.train_count > 5:
             # train transformer-based world model
             pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
             for i in pbar:
@@ -242,10 +242,10 @@ class DreamerLearner:
                     + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
                 )
 
-        if self.train_count == 46:
+        if self.train_count == 6:
             print('Start training actor & critic...')
 
-        if self.train_count > 0:
+        if self.train_count > 5:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
@@ -256,6 +256,17 @@ class DreamerLearner:
                 self.train_agent_with_transformer(samples)
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
+        
+        if self.train_count > 5 and self.train_count % 15 == 0:
+            self.tokenizer.eval()
+            
+            sample = self.replay_buffer.sample_batch(batch_num_samples=1,
+                                                     sequence_length=self.config.HORIZON,
+                                                     sample_from_start=True,
+                                                     valid_sample=True)
+            
+            self.model.visualize_attn(sample, self.tokenizer)
+        
         self.cur_wandb_epoch += 1
     
     def train_vq_tokenizer(self, x):
@@ -307,6 +318,8 @@ class DreamerLearner:
     
     def train_model(self, samples):
         self.model.train()
+        self.tokenizer.eval()
+        
         # loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
         loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
         self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm) # or GRAD_CLIP

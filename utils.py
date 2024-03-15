@@ -234,7 +234,11 @@ def load_mawm_model(config, ckpt_path):
                          config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
                          use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
 
-    actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+    if not config.use_stack:
+        actor = Actor(config.IN_DIM, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
+    else:
+        print(f"Use stacking observation mode. Currently stack {config.stack_obs_num} observations for decision making.")
+        actor = Actor(config.IN_DIM * config.stack_obs_num, config.ACTION_SIZE, config.ACTION_HIDDEN, config.ACTION_LAYERS).to(config.DEVICE)
 
     ckpt = torch.load(ckpt_path, map_location=config.DEVICE)
 

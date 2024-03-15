@@ -38,7 +38,7 @@ class DreamerRunner:
 
         while True:
             rollout, info = self.server.run()
-            ent = rollout['entropy'].sum(0) / (rollout['entropy'] > 1e-4).sum(0)
+            ent = rollout['entropy'].sum(0) / (rollout['entropy'] > 1e-6).sum(0)
             ent_str = f""
             for e in ent.tolist():
                 ent_str += f"{e:.4f} "
@@ -55,9 +55,9 @@ class DreamerRunner:
 
             self.learner.step(rollout)
 
-            if (save_interval_steps - last_save_steps) > 10000:
+            if (save_interval_steps - last_save_steps) > 1000:
                 self.learner.save(self.learner.config.RUN_DIR + f"/ckpt/model_{save_interval_steps // 1000}Ksteps.pth")
-                last_save_steps = save_interval_steps // 10000 * 10000
+                last_save_steps = save_interval_steps // 1000 * 1000
 
             if cur_episode >= max_episodes or cur_steps >= max_steps:
                 break

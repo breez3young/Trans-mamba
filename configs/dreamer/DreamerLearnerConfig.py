@@ -30,7 +30,7 @@ class DreamerLearnerConfig(DreamerConfig):
         self.ACTOR_LR = 5e-4
         self.VALUE_LR = 5e-4
         self.CAPACITY = 250000
-        self.MIN_BUFFER_SIZE = 500 # 500
+        self.MIN_BUFFER_SIZE = 1000 # 500
         self.MODEL_EPOCHS = 200 # 60
         self.EPOCHS = 5 # 4; 27m epochs should be 20, agents_num ~ 10 should be 20
         self.PPO_EPOCHS = 5
