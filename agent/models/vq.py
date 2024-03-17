@@ -94,6 +94,21 @@ class SimpleVQAutoEncoder(nn.Module):
         clamp into [-1, 1]
         '''
         return y.clamp(-1., 1.)
+    
+    def compute_loss(self, x, alpha = 10.):
+        out, indices, cmt_loss = self(x, True, True)
+        rec_loss = (out - x).abs().mean()
+        loss = rec_loss + alpha * cmt_loss
+        
+        active_rate = indices.detach().unique().numel() / self.codebook.codebook_size * 100
+        
+        loss_dict = {
+            "vq/cmt_loss": cmt_loss.item(),
+            "vq/rec_loss": rec_loss.item(),
+            "vq/active": active_rate,
+        }
+        
+        return loss, loss_dict
 
 
 class SimpleFSQAutoEncoder(nn.Module):
@@ -189,3 +204,16 @@ class SimpleFSQAutoEncoder(nn.Module):
         clamp into [-1, 1]
         '''
         return y.clamp(-1., 1.)
+    
+    def compute_loss(self, x):
+        out, indices = self(x, True, True)
+        loss = (out - x).abs().mean()
+
+        active_rate = indices.detach().unique().numel() / self.codebook.codebook_size * 100
+        
+        loss_dict = {
+            "vq/rec_loss": loss.item(),
+            "vq/active": active_rate,
+        }
+        
+        return loss, loss_dict

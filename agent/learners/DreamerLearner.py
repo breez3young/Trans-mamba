@@ -258,6 +258,7 @@ class DreamerLearner:
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         
         if self.train_count % 20 == 0 and self.train_count > 19:
+            self.model.eval()
             self.tokenizer.eval()
             sample = self.replay_buffer.sample_batch(batch_num_samples=1,
                                                      sequence_length=self.config.HORIZON,
@@ -371,37 +372,6 @@ class DreamerLearner:
             self.old_critic = deepcopy(self.critic)
             self.cur_update = 0
 
-    # def train_agent(self, samples):
-    #     actions, av_actions, old_policy, imag_feat, returns = actor_rollout(samples['observation'],
-    #                                                                         samples['action'],
-    #                                                                         samples['last'], self.model,
-    #                                                                         self.actor,
-    #                                                                         self.critic if self.config.ENV_TYPE == Env.STARCRAFT
-    #                                                                         else self.old_critic,
-    #                                                                         self.config)
-    #     adv = returns.detach() - self.critic(imag_feat).detach()
-    #     if self.config.ENV_TYPE == Env.STARCRAFT:
-    #         adv = advantage(adv)
-    #     wandb.log({'Agent/Returns': returns.mean()})
-    #     for epoch in range(self.config.PPO_EPOCHS):
-    #         inds = np.random.permutation(actions.shape[0])
-    #         step = 2000
-    #         for i in range(0, len(inds), step):
-    #             self.cur_update += 1
-    #             idx = inds[i:i + step]
-    #             loss = actor_loss(imag_feat[idx], actions[idx], av_actions[idx] if av_actions is not None else None,
-    #                               old_policy[idx], adv[idx], self.actor, self.entropy)
-    #             actor_grad_norm = self.apply_optimizer(self.actor_optimizer, self.actor, loss, self.config.GRAD_CLIP_POLICY)
-    #             self.entropy *= self.config.ENTROPY_ANNEALING
-    #             val_loss = value_loss(self.critic, imag_feat[idx], returns[idx])
-    #             if np.random.randint(20) == 9:
-    #                 wandb.log({'Agent/val_loss': val_loss, 'Agent/actor_loss': loss})
-    #             critic_grad_norm = self.apply_optimizer(self.critic_optimizer, self.critic, val_loss, self.config.GRAD_CLIP_POLICY)
-    #             wandb.log({'Agent/actor_grad_norm': actor_grad_norm, 'Agent/critic_grad_norm': critic_grad_norm})
-                
-    #             if self.config.ENV_TYPE == Env.FLATLAND and self.cur_update % self.config.TARGET_UPDATE == 0:
-    #                 self.old_critic = deepcopy(self.critic)
-
     def apply_optimizer(self, opt, model, loss, grad_clip):
         opt.zero_grad()
         loss.backward()
@@ -425,4 +395,106 @@ class DreamerLearner:
     def _to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return {k: batch[k].to(self.config.DEVICE) for k in batch}
 
+    
+    ### for offline pretraining world model
+    def train_wm_offline(self, epochs):
+        ckpt_path = Path(self.config.RUN_DIR) / "ckpt"
+        ckpt_path.mkdir(parents=True, exist_ok=True)
         
+        def run_epoch(mode: str, epoch):
+            self.tqdm_vis = False
+            is_train = False
+            if mode == "train":
+                is_train = True
+                self.tqdm_vis = True
+                
+            intermediate_losses = defaultdict(float)
+            
+            self.tokenizer.train(is_train)
+            self.model.train(is_train)
+            
+            tokenizer_aver_loss = 0.
+            model_aver_loss = 0.
+            
+            # train tokenizer
+            pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Epoch {epoch} - Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
+            for _ in pbar:
+                samples = self.replay_buffer.sample_batch(batch_num_samples=256,
+                                                          sequence_length=1,
+                                                          sample_from_start=True)
+                samples = self._to_device(samples)
+                loss, loss_dict = self.tokenizer.compute_loss(samples["observation"])
+                if is_train:
+                    self.apply_optimizer(self.tokenizer_optimizer, self.tokenizer, loss, self.config.max_grad_norm)
+                    
+                tokenizer_aver_loss += loss.item()
+                
+                if self.config.tokenizer_type == 'vq':
+                    pbar.set_description(
+                        f"Epoch {epoch} - Training tokenizer:"
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + '/rec_loss']:.4f} | "
+                        + f"cmt loss: {loss_dict[self.config.tokenizer_type + '/cmt_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + '/active']:.3f} | "
+                    )
+                elif self.config.tokenizer_type == 'fsq':
+                    pbar.set_description(
+                        f"Epoch {epoch} - Training tokenizer:"
+                        + f"rec loss: {loss_dict[self.config.tokenizer_type + '/rec_loss']:.4f} | "
+                        + f"active %: {loss_dict[self.config.tokenizer_type + '/active']:.3f} | "
+                    )
+                else:
+                    raise NotImplementedError
+                    
+                for loss_name, loss_value in loss_dict.items():
+                    intermediate_losses[loss_name + "_" + mode] += loss_value / self.config.MODEL_EPOCHS
+            
+            # train world model
+            self.tokenizer.eval()
+            if (epoch + 1) >= 10:
+                pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Epoch {epoch} - Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
+                for _ in pbar:
+                    samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
+                                                            sequence_length=self.config.SEQ_LENGTH,
+                                                            sample_from_start=True)
+                    samples = self._to_device(samples)
+                    loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
+                    if is_train:
+                        self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm)
+                    
+                    model_aver_loss += loss.item()
+
+                    for loss_name, loss_value in loss_dict.items():
+                        intermediate_losses[loss_name + "_" + mode] += loss_value / self.config.MODEL_EPOCHS
+
+                    pbar.set_description(
+                        f"Epoch {epoch} - Training world model:"
+                        + f"total loss: {loss_dict['world_model/total_loss']:.4f} | "
+                        + f"obs loss: {loss_dict['world_model/loss_obs']:.4f} | "
+                        + f"rew loss: {loss_dict['world_model/loss_rewards']:.4f} | "
+                        + f"dis loss: {loss_dict['world_model/loss_ends']:.3f} | "
+                        + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
+                    )
+            
+            
+            wandb.log({'epoch': epoch, **intermediate_losses})
+            
+            return tokenizer_aver_loss / self.config.MODEL_EPOCHS, model_aver_loss / self.config.MODEL_EPOCHS
+        
+        
+        for i in range(epochs):
+            t_loss, wm_loss = run_epoch("train", i)
+            
+            if (i + 1) > 10:
+                self.save(ckpt_path / f"epoch_{i}.pth")
+            
+            if (i + 1) % 20 == 0:
+                self.model.eval()
+                self.tokenizer.eval()
+                
+                sample = self.replay_buffer.sample_batch(batch_num_samples=1,
+                                                         sequence_length=self.config.HORIZON,
+                                                         sample_from_start=True,
+                                                         valid_sample=True)
+                sample = self._to_device(sample)
+                self.model.visualize_attn(sample, self.tokenizer, Path(self.config.RUN_DIR) / "visualization" / "attn" / f"epoch_{i + 1}")
+    

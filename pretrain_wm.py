@@ -1,0 +1,79 @@
+
+import argparse
+import os
+import shutil
+from pathlib import Path
+from datetime import datetime
+
+from configs.dreamer.DreamerLearnerConfig import DreamerLearnerConfig
+from configs.EnvConfigs import StarCraftConfig
+from environments import Env
+
+import wandb
+
+offline_dataset_path = {
+    '2m_vs_1z_20K': "/mnt/data/optimal/zhangyang/.offline_dt/mamba_20k.pkl",
+    '2m_vs_1z_50K': "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl",
+}
+
+def get_args_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--env', type=str, default='starcraft')
+    parser.add_argument('--map', type=str, default='3m')
+    parser.add_argument('--num_steps', type=int, default=50000)
+    parser.add_argument('--epochs', type=int, default=500)
+    
+    parser.add_argument('--tokenizer', type=str, default='vq')
+    parser.add_argument('--decay', type=float, default=0.8)
+    
+    ## wandb mode
+    parser.add_argument('--mode', type=str, default='disabled')
+    
+    return parser
+
+def main(args):
+    learner_config = DreamerLearnerConfig()
+    
+    if args.env == 'starcraft':
+        env_config = StarCraftConfig(args.map, 1234)
+        env = env_config.create_env()
+    
+    learner_config.ENV_TYPE = Env(args.env)
+    learner_config.IN_DIM = env.n_obs
+    learner_config.ACTION_SIZE = env.n_actions
+    learner_config.NUM_AGENTS = env.n_agents
+    
+    ## prepare for loading offline dataset
+    learner_config.load_path = offline_dataset_path.get(f"{args.map}_{args.num_steps // 1000}K", None)
+    assert learner_config.load_path is not None, f"No {args.map}_{args.num_steps // 1000}K offline dataset"
+    learner_config.is_preload = True
+    learner_config.use_external_rew_model = False
+    learner_config.use_stack = False
+    
+    ## setting tokenizer type
+    learner_config.tokenizer_type = args.tokenizer
+    learner_config.ema_decay = args.decay
+    
+    ## make run directory
+    save_path = Path("pretrained_weights") / f'pretrained_wm' / (f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3])
+    save_path.mkdir(parents=True, exist_ok=True)
+    learner_config.RUN_DIR = str(save_path)
+    
+    ## wandb initialize
+    wandb.init(
+        config=learner_config.to_dict(),
+        mode=args.mode,
+        project="0301_sc2",
+        group="(pretrain) mawm",
+        name=f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}",
+    )
+    
+    # do training
+    learner = learner_config.create_learner()
+    learner.train_wm_offline(args.epochs)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('MAWM pre-training with offline dataset', parents=[get_args_parser()])
+    args = parser.parse_args()
+    main(args)

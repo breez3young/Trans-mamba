@@ -3,7 +3,7 @@ export SC2PATH="/mnt/data/optimal/zhangyang/StarCraftII"
 
 # 2m_vs_1z model pth: /mnt/data/optimal/zhangyang/code/bins/results/starcraft/2m_vs_1z/run10/ckpt/model.pth
 # 2s_vs_1sc: /mnt/data/optimal/zhangyang/code/bins/results/starcraft/2s_vs_1sc/run14/ckpt/model.pth
-mawm_path="/mnt/data/optimal/zhangyang/code/bins/debug_results/starcraft/2m_vs_1z_vq/run64/ckpt/model_6Ksteps.pth"
+mawm_path="/mnt/data/optimal/zhangyang/code/bins/results/starcraft/2m_vs_1z_vq/run16/ckpt/model_12Ksteps.pth"
 tokenizer="vq"
 
 # 2m_vs_1z model pth (seed 123): /mnt/data/optimal/zhangyang/code/mamba/mamba_results/starcraft/2m_vs_1z/run2/ckpt/mamba_model.pth

@@ -1,5 +1,6 @@
 debug_results
 test_results
+test_plot_results
 wandb
 results
 pretrained_weights
