@@ -2,6 +2,7 @@ import argparse
 import os
 import shutil
 from pathlib import Path
+from datetime import datetime
 
 from agent.runners.DreamerRunner import DreamerRunner
 from configs import Experiment, SimpleObservationConfig, NearRewardConfig, DeadlockPunishmentConfig, RewardsComposerConfig
@@ -17,21 +18,23 @@ from utils import generate_group_name
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default="flatland", help='Flatland or SMAC env')
-    parser.add_argument('--env_name', type=str, default="5_agents", help='Specific setting')
+    parser.add_argument('--env', type=str, default="starcraft", help='Flatland or SMAC env')
+    parser.add_argument('--map', type=str, default="3m", help='Specific setting')
     parser.add_argument('--n_workers', type=int, default=2, help='Number of workers')
-    parser.add_argument('--seed', type=int, default=1, help='Number of workers')
-    parser.add_argument('--steps', type=int, default=1e6, help='Number of workers')
+    parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--steps', type=int, default=1e6)
     parser.add_argument('--mode', type=str, default='disabled')
     parser.add_argument('--tokenizer', type=str, default='vq')
     parser.add_argument('--decay', type=float, default=0.8)
     parser.add_argument('--temperature', type=float, default=1.)
+    
+    parser.add_argument('--minibuffer_size', type=float, default=500)
     return parser.parse_args()
 
 
-def train_dreamer(exp, n_workers): 
+def train_actor_with_pretrained_wm(exp, n_workers, load_path): 
     runner = DreamerRunner(exp.env_config, exp.learner_config, exp.controller_config, n_workers)
-    runner.run(exp.steps, exp.episodes)
+    runner.train_actor(load_path, exp.steps, exp.episodes)
 
 
 def get_env_info(configs, env):
@@ -91,9 +94,9 @@ if __name__ == "__main__":
     args = parse_args()
     RANDOM_SEED += args.seed * 100
     if args.env == Env.FLATLAND:
-        configs = prepare_flatland_configs(args.env_name)
+        configs = prepare_flatland_configs(args.map)
     elif args.env == Env.STARCRAFT:
-        configs = prepare_starcraft_configs(args.env_name)
+        configs = prepare_starcraft_configs(args.map)
     else:
         raise Exception("Unknown environment")
     configs["env_config"][0].ENV_TYPE = Env(args.env)
@@ -106,43 +109,36 @@ if __name__ == "__main__":
     configs["controller_config"].ema_decay = args.decay
     
     configs["controller_config"].temperature = args.temperature
+    
+    ## preparing for training actor only
+    configs["learner_config"].load_path = None
+    configs["learner_config"].is_preload = False
+    configs["learner_config"].use_external_rew_model = False
+    configs["learner_config"].MIN_BUFFER_SIZE = args.minibuffer_size
 
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / (args.env_name + f"_{args.tokenizer}")
-    if not run_dir.exists():
-        curr_run = 'run1'
-    else:
-        exst_run_nums = [int(str(folder.name).split('run')[1]) for folder in run_dir.iterdir() if
-                            str(folder.name).startswith('run')]
-        if len(exst_run_nums) == 0:
-            curr_run = 'run1'
-        else:
-            curr_run = 'run%i' % (max(exst_run_nums) + 1)
+    save_path = Path("pretrained_weights") / f'actor_with_pretrained_wm' / (f"mawm_{args.map}_actor_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3])
+    save_path.mkdir(parents=True, exist_ok=True)
+    save_ckpt_path = save_path / 'ckpt'
+    save_ckpt_path.mkdir(parents=True, exist_ok=True)
     
-    run_dir = run_dir / curr_run
-    if not run_dir.exists():
-        os.makedirs(str(run_dir))
-        os.makedirs(str(run_dir / "ckpt"))
-
-    shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "agent"), dst=run_dir / "agent")
-    shutil.copytree(src=(Path(os.path.dirname(os.path.abspath(__file__))) / "configs"), dst=run_dir / "configs")
+    configs["learner_config"].RUN_DIR = str(save_path)
     
-    print(f"Run files are saved at {str(run_dir)}")
+    print(f"Run files are saved at {str(save_path)}")
     # -------------------
-
-    configs["learner_config"].RUN_DIR = str(run_dir)
-
-    group_name = generate_group_name(args, configs["learner_config"])
+    
+    # setting the world model path to load
+    args.wm_path = "/mnt/data/optimal/zhangyang/code/bins/pretrained_weights/pretrained_wm/mawm_2m_vs_1z_vq_50K_obs16_2024-03-17_00-04-45-325/ckpt/epoch_499.pth"
+    
 
     global wandb
     import wandb
     wandb.init(
-        config=configs["learner_config"].to_dict(),
+        config=vars(args),
         mode=args.mode,
-        project="sc2_formal",
-        group="(temperature)" + group_name + f"_temp={configs['controller_config'].temperature}",
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
-        notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; no using stack observations"
+        project="0301_sc2",
+        group="(actor w/ pretrained wm)" + f"mawm_actor_temp={configs['controller_config'].temperature}",
+        name=f'mawm_{args.map}_seed_{RANDOM_SEED}',
     )
 
     exp = Experiment(steps=args.steps,
@@ -154,4 +150,4 @@ if __name__ == "__main__":
                      controller_config=configs["controller_config"],
                      learner_config=configs["learner_config"])
 
-    train_dreamer(exp, n_workers=args.n_workers)
+    train_actor_with_pretrained_wm(exp, n_workers=args.n_workers, load_path=args.wm_path)

@@ -157,6 +157,14 @@ class DreamerLearner:
                 'model': {k: v.cpu() for k, v in self.model.state_dict().items()},
                 'actor': {k: v.cpu() for k, v in self.actor.state_dict().items()},
                 'critic': {k: v.cpu() for k, v in self.critic.state_dict().items()}}
+        
+    def load_pretrained_wm(self, load_path):
+        ckpt = torch.load(load_path)
+        self.tokenizer.load_state_dict(ckpt['tokenizer'])
+        self.model.load_state_dict(ckpt['model'])
+        
+        self.tokenizer.eval()
+        self.model.eval()
 
     def save(self, save_path):
         torch.save(self.params(), save_path)
@@ -317,8 +325,8 @@ class DreamerLearner:
     #     return loss_dict
     
     def train_model(self, samples):
-        self.model.train()
         self.tokenizer.eval()
+        self.model.train()
         
         # loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
         loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
@@ -327,7 +335,6 @@ class DreamerLearner:
         return loss_dict
 
     def train_agent_with_transformer(self, samples):
-        # self.tokenizer.eval()
         self.tokenizer.eval()
         self.model.eval()
 
@@ -498,3 +505,41 @@ class DreamerLearner:
                 sample = self._to_device(sample)
                 self.model.visualize_attn(sample, self.tokenizer, Path(self.config.RUN_DIR) / "visualization" / "attn" / f"epoch_{i + 1}")
     
+    
+    ### for training actor and critic only
+    def train_actor_only(self, rollout):
+        #### adding data to replay buffer
+        if self.n_agents != rollout['action'].shape[-2]:
+            self.n_agents = rollout['action'].shape[-2]
+
+        self.accum_samples += len(rollout['action'])
+        self.total_samples += len(rollout['action'])
+
+        self.add_experience_to_dataset(rollout)
+        self.mamba_replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
+                                        rollout['fake'], rollout['last'], rollout.get('avail_action'))
+        
+        self.step_count += 1
+        if self.accum_samples < self.config.N_SAMPLES:
+            return
+
+        if self.replay_buffer.num_steps < self.config.MIN_BUFFER_SIZE:
+            return
+
+        self.accum_samples = 0
+        sys.stdout.flush()
+
+        self.train_count += 1
+
+        intermediate_losses = defaultdict(float)
+        
+        # train actor-critic
+        for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
+            samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
+                                                        sequence_length=self.config.stack_obs_num if self.config.use_stack else 1,
+                                                        sample_from_start=False,
+                                                        valid_sample=False)
+            samples = self._to_device(samples)
+            self.train_agent_with_transformer(samples)
+
+        wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
