@@ -25,7 +25,7 @@ from .transformer import Transformer, TransformerConfig, get_sinusoid_encoding_t
 from .transformer import Perceiver, PerceiverConfig
 
 from .world_model_env import MAWorldModelEnv
-from utils import init_weights, action_split_into_bins, discretize_into_bins, initialize_weights
+from utils import init_weights, action_split_into_bins, discretize_into_bins, initialize_weights, symlog, symexp
 import wandb
 import ipdb
 
@@ -42,7 +42,7 @@ class MAWorldModelOutput:
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
                  config: TransformerConfig, perattn_config: PerceiverConfig,
-                 action_dim: int, use_bin: bool = False, bins: int = 64) -> None:
+                 action_dim: int, use_bin: bool = False, bins: int = 64, use_classification: bool = False) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.use_bin = use_bin
@@ -119,13 +119,19 @@ class MAWorldModel(nn.Module):
             )
         )
         
+        self.use_classification = use_classification
+        if use_classification:
+            print("Use cross-entropy to train the prediction of termination...")
+        else:
+            print("Use log-prob to train the prediction of termination...")
+
         self.head_ends = Head(
             max_blocks=config.max_blocks,
             block_mask=all_but_last_pattern,
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ELU(),
-                nn.Linear(config.embed_dim, 1),
+                nn.Linear(config.embed_dim, 2 if use_classification else 1),
             )
         )
 
@@ -156,16 +162,16 @@ class MAWorldModel(nn.Module):
 
         self.apply(init_weights)
         
-        initialize_weights(self.head_rewards, mode='xavier')
-        # initialize_weights(self.head_ends, mode='xavier')
-        # initialize_weights(self.heads_avail_actions, mode='xavier')
+        # initialize_weights(self.head_rewards, mode='xavier')
+        initialize_weights(self.head_ends, mode='xavier')
+        initialize_weights(self.heads_avail_actions, mode='xavier')
         
-        self.use_ib = True # use iris databuffer 
+        self.use_ib = False # use iris databuffer 
 
     def __repr__(self) -> str:
         return "multi_agent_world_model"
 
-    def forward(self, tokens: torch.LongTensor, perattn_out: torch.Tensor = None, past_keys_values: Optional[KeysValues] = None, return_attn: bool = False) -> MAWorldModelOutput:
+    def forward(self, tokens: torch.LongTensor, perattn_out: torch.Tensor = None, past_keys_values: Optional[KeysValues] = None, return_attn: bool = False, attention_mask: torch.Tensor = None) -> MAWorldModelOutput:
         bs = tokens.size(0)
         num_steps = tokens.size(1)  # (B, T)
 
@@ -183,7 +189,10 @@ class MAWorldModel(nn.Module):
 
         sequences += self.pos_emb(prev_steps + torch.arange(num_steps, device=tokens.device))
 
-        x, attn_output = self.transformer(sequences, past_keys_values, return_attn = return_attn)
+        x, attn_output = self.transformer(sequences,
+                                          past_keys_values,
+                                          return_attn = return_attn,
+                                          attention_mask = attention_mask)
 
         logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
 
@@ -201,7 +210,11 @@ class MAWorldModel(nn.Module):
 
         return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, attn_output=attn_output)
 
-    def compute_loss(self, batch, tokenizer: Tokenizer, **kwargs: Any):
+    def compute_loss(self,
+                     batch,
+                     tokenizer: Tokenizer,
+                     attention_mask: torch.Tensor = None,
+                     **kwargs: Any):
         device = batch['observation'].device
 
         # only take discrete action space into account
@@ -237,7 +250,7 @@ class MAWorldModel(nn.Module):
         tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1) # (B, L, (K+N))
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
 
-        outputs = self(tokens, perattn_out = perattn_out)
+        outputs = self(tokens, perattn_out = perattn_out, attention_mask = attention_mask)
 
         # compute labels
         if self.use_ib:  # if use iris databuffer
@@ -248,11 +261,18 @@ class MAWorldModel(nn.Module):
 
             loss_obs = F.cross_entropy(logits_observations, labels_observations)
 
-            pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-            loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+            if not self.use_classification:
+                pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
+                loss_ends = -(pred_ends.log_prob((1. - labels_ends)) * valid_mask).sum() / valid_mask.sum()
+            else:
+                raise NotImplementedError
 
             l1_criterion = nn.SmoothL1Loss(reduction="none")
-            loss_rewards = l1_criterion(outputs.pred_rewards, batch['reward'])
+
+            ## regression label for rewards
+            labels_rewards = symlog(batch['reward'])
+
+            loss_rewards = l1_criterion(outputs.pred_rewards, labels_rewards)
             loss_rewards = (loss_rewards.squeeze(-1) * valid_mask).sum() / valid_mask.sum()
 
             # criterion = nn.CrossEntropyLoss(reduction='none')
@@ -268,7 +288,39 @@ class MAWorldModel(nn.Module):
             loss_av_actions = -(pred_av_actions.log_prob(batch['av_action'][:, 1:]) * valid_mask[:, 1:]).sum() / valid_mask[:, 1:].sum()
 
         else:  # use mamba databuffer
-            raise NotImplementedError("Currently, MAWM does not support the usage of MAMBA databuffer.")
+            ### guided by dones mask, compute observation loss
+            dones = rearrange(batch['done'], 'b l n 1 -> (b n) l')
+            labels_obs_token = rearrange(obs_tokens, 'b l n m -> (b n) (l m)')
+            loss_obs = 0.
+            for idx in range(dones.size(0)):
+                cur_done = dones[idx]
+                if cur_done[:-1].sum() > 0:
+                    done_idx = (cur_done == 1).nonzero().squeeze() + 1
+                    divide_idx = done_idx * self.num_obs_tokens
+                    cur_loss = F.cross_entropy(outputs.logits_observations[idx, :(divide_idx - 1)], labels_obs_token[idx, 1 : divide_idx]) + F.cross_entropy(outputs.logits_observations[idx, divide_idx:-1], labels_obs_token[idx, (divide_idx + 1):])
+                    loss_obs += cur_loss / 2
+                else:
+                    loss_obs += F.cross_entropy(outputs.logits_observations[idx, :-1], labels_obs_token[idx, 1:])
+
+            loss_obs /= dones.size(0)
+
+            ### compute discount loss
+            if not self.use_classification:
+                pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
+                loss_ends = -torch.mean(pred_ends.log_prob((1. - batch['done'])))
+            else:
+                logits_ends = rearrange(outputs.logits_ends, 'b l n e -> (b l n) e')
+                labels_ends = rearrange(batch['done'], 'b l n 1 -> (b l n)').to(torch.long)
+                loss_ends = F.cross_entropy(logits_ends, labels_ends)
+
+            ### compute reward loss
+            loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward'])
+
+            ### compute av_action loss
+            pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
+            loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'][:, 1:]))
+
+            info_loss = 0.
 
         loss = loss_obs + loss_ends + loss_rewards + loss_av_actions + info_loss
 
@@ -295,7 +347,7 @@ class MAWorldModel(nn.Module):
         
         return labels_observations.reshape(-1), labels_rewards, labels_ends
     
-    def compute_labels_world_model_n(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_labels_world_model_all_valid(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
         labels_observations = rearrange(obs_tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')[:, 1:]
         labels_rewards = rearrange(rewards.transpose(1, 2), 'b n l 1 -> (b n) l 1')
@@ -464,6 +516,9 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations
 
         rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
+        ## inverse transforming into original space
+        reward = symexp(reward)
+
         rewards.append(reward)
         dones.append(done)
 

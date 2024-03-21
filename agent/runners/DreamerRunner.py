@@ -14,7 +14,7 @@ class DreamerServer:
         
         eval_controller_config = deepcopy(controller_config)
         eval_controller_config.temperature = 1.0
-        self.eval_episodes_num = 10
+        self.eval_episodes_num = 5
         self.eval_workers = [DreamerWorker.remote(i, env_config, eval_controller_config) for i in range(self.eval_episodes_num)]
         self.eval_tasks = []
 
@@ -66,6 +66,8 @@ class DreamerRunner:
 
         wandb.define_metric("steps")
         wandb.define_metric("reward", step_metric="steps")
+        wandb.define_metric("eval_win_rate", step_metric="steps")
+        wandb.define_metric("eval_returns", step_metric="steps")
 
         while True:
             rollout, info = self.server.run()
@@ -91,12 +93,14 @@ class DreamerRunner:
                 last_save_steps = save_interval_steps // 1000 * 1000
 
             ## evaluation
-            if (save_interval_steps - last_eval_steps) > 200:
+            if (save_interval_steps - last_eval_steps) > 2000:
                 eval_win_rate, eval_returns = self.server.evaluate(self.learner.params())
-                last_eval_steps = save_interval_steps // 200 * 200
+                last_eval_steps = save_interval_steps // 2000 * 2000
                 
                 wandb.log({'eval_win_rate': eval_win_rate, "steps": save_interval_steps})
                 wandb.log({'eval_returns': eval_returns, "steps": save_interval_steps})
+
+                print(f"Steps: {save_interval_steps}, Eval_win_rate: {eval_win_rate}, Eval_returns: {eval_returns}")
 
             if cur_episode >= max_episodes or cur_steps >= max_steps:
                 break

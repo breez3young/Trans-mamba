@@ -26,6 +26,8 @@ def parse_args():
     parser.add_argument('--tokenizer', type=str, default='vq')
     parser.add_argument('--decay', type=float, default=0.8)
     parser.add_argument('--temperature', type=float, default=1.)
+
+    parser.add_argument('--average_r', action='store_true')
     return parser.parse_args()
 
 
@@ -107,8 +109,10 @@ if __name__ == "__main__":
     
     configs["controller_config"].temperature = args.temperature
 
+    configs["learner_config"].critic_average_r = args.average_r
+
     # make run directory
-    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/results") / args.env / (args.env_name + f"_{args.tokenizer}")
+    run_dir = Path(os.path.dirname(os.path.abspath(__file__)) + "/debug_results") / args.env / (args.env_name + f"_{args.tokenizer}")
     if not run_dir.exists():
         curr_run = 'run1'
     else:
@@ -139,9 +143,9 @@ if __name__ == "__main__":
     wandb.init(
         config=configs["learner_config"].to_dict(),
         mode=args.mode,
-        project="sc2_formal",
-        group="(temperature)" + group_name + f"_temp={configs['controller_config'].temperature}",
-        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}',
+        project="0301_sc2",
+        group=f"(test)" + group_name + "mamba_buffer",
+        name=f'mawm_{args.env_name}_seed_{RANDOM_SEED}_{args.steps // 1000}K_interval={configs["learner_config"].N_SAMPLES}',
         notes="no epsilon exploration; no absorbing state; a&c on rec obs; wm.predict_reward weight reinitialize; no using stack observations"
     )
 

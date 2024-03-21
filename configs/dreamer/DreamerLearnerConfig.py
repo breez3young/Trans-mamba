@@ -27,18 +27,19 @@ class DreamerLearnerConfig(DreamerConfig):
 
         # optimal smac config
         self.MODEL_LR = 2e-4
-        self.ACTOR_LR = 5e-4
-        self.VALUE_LR = 5e-4
-        self.CAPACITY = 250000
+        self.ACTOR_LR = 5e-4  # 5e-4
+        self.VALUE_LR = 5e-4  # 5e-4
+        self.CAPACITY = 500000  # 250000
         self.MIN_BUFFER_SIZE = 1000 # 500
         self.MODEL_EPOCHS = 200 # 60
+        self.WM_EPOCHS = 200
         self.EPOCHS = 5 # 4; 27m epochs should be 20, agents_num ~ 10 should be 20
         self.PPO_EPOCHS = 5
         self.MODEL_BATCH_SIZE = 30 # 40; 27m bs should be 10, agents_num ~ 10 should be 20
         self.BATCH_SIZE = 30 # 40; 27m bs should be 8, agents_num ~ 10 should be 20
         # self.SEQ_LENGTH = 20
         self.SEQ_LENGTH = self.HORIZON
-        self.N_SAMPLES = 1
+        self.N_SAMPLES = 200  # 1
         self.TARGET_UPDATE = 20  # 1
         self.DEVICE = 'cuda'
         self.GRAD_CLIP = 100.0
@@ -68,6 +69,11 @@ class DreamerLearnerConfig(DreamerConfig):
         self.load_path = "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl"
 
         self.use_external_rew_model = False
+
+        self.sample_temperature = 20.
+
+        ## control whether average the predicted rewards
+        self.critic_average_r = False
 
     def create_learner(self):
         return DreamerLearner(self)

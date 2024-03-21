@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import torch
 import torch.distributions as td
+import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import torchvision
 
@@ -122,8 +123,13 @@ class MAWorldModelEnv:
                 reward = outputs_wm.pred_rewards.float()
                 
                 # done = Categorical(logits=outputs_wm.logits_ends).sample().unsqueeze(-1).to(torch.bool)  # (B,), numpy
-                pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs_wm.logits_ends), 1)
-                done = pred_ends.mean
+                if not self.world_model.use_classification:
+                    pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs_wm.logits_ends), 1)
+                    done = pred_ends.mean
+                else:
+                    # done = Categorical(logits=outputs_wm.logits_ends).sample()
+                    done_probs = F.softmax(outputs_wm.logits_ends, dim=-1)
+                    done = done_probs[..., 0]
 
                 if self.predict_avail_action:
                     avail_action_dist = td.independent.Independent(td.Bernoulli(logits=outputs_wm.pred_avail_action), 1)

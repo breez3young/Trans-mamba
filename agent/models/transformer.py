@@ -161,7 +161,7 @@ class Perceiver(nn.Module):
                  ) -> None:
         super().__init__()
 
-        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
+        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim) * 0.02)
 
         self.cross_attn_blocks = nn.ModuleList([
             PreNorm(latent_dim, PerAttention(latent_dim, dim, heads = cross_heads, dim_head = cross_dim_head, dropout = attn_dropout), context_dim=dim),
@@ -210,14 +210,17 @@ class Transformer(nn.Module):
         device = self.ln_f.weight.device  # Assumption that all submodules are on the same device
         return KeysValues(n, self.config.num_heads, max_tokens, self.config.embed_dim, self.config.num_layers, device)
 
-    def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None, return_attn: bool = False) -> torch.Tensor:
+    def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None,
+                return_attn: bool = False,
+                attention_mask: torch.Tensor = None,
+                ) -> torch.Tensor:
         assert past_keys_values is None or len(past_keys_values) == len(self.blocks)
         attn_output = [] if return_attn else None
         
         x = self.drop(sequences)
         for i, block in enumerate(self.blocks):
             x, attn_weights = block(x, None if past_keys_values is None else past_keys_values[i],
-                                    return_attn = return_attn)
+                                    return_attn = return_attn, attention_mask = attention_mask)
             
             if return_attn:
                 attn_output.append(attn_weights)
@@ -240,9 +243,12 @@ class Block(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, past_keys_values: Optional[KeysValues] = None,
-                return_attn: bool = False) -> torch.Tensor:
+                return_attn: bool = False,
+                attention_mask: torch.Tensor = None,
+                ) -> torch.Tensor:
         x_attn, attn_weights = self.attn(self.ln1(x), past_keys_values,
-                                         return_attn = return_attn)
+                                         return_attn = return_attn,
+                                         attention_mask= attention_mask)
         x = x + x_attn
         x = x + self.mlp(self.ln2(x))
         return x, attn_weights
@@ -269,7 +275,9 @@ class SelfAttention(nn.Module):
         self.register_buffer('mask', causal_mask if config.attention == 'causal' else block_causal_mask)
 
     def forward(self, x: torch.Tensor, kv_cache: Optional[KVCache] = None,
-                return_attn: bool = False) -> torch.Tensor:
+                return_attn: bool = False,
+                attention_mask: torch.Tensor = None,
+                ) -> torch.Tensor:
         B, T, C = x.size()
         if kv_cache is not None:
             b, nh, L, c = kv_cache.shape
@@ -286,7 +294,14 @@ class SelfAttention(nn.Module):
             k, v = kv_cache.get()
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask[L:L + T, :L + T] == 0, float('-inf'))
+
+        if kv_cache is None and attention_mask is not None:
+            attention_mask = attention_mask[:, None, :, :].repeat(1, self.num_heads, 1, 1)
+            att = att.masked_fill(attention_mask[L:L + T, :L + T] == 0, float('-inf'))
+
+        else:
+            att = att.masked_fill(self.mask[L:L + T, :L + T] == 0, float('-inf'))
+
         att = F.softmax(att, dim=-1)
         
         if return_attn:

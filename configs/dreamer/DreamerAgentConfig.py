@@ -100,8 +100,8 @@ class DreamerConfig(Config):
             cross_dim_head=64,
             latent_heads=8,
             latent_dim_head=64,
-            attn_dropout=0.,
-            ff_dropout=0.
+            attn_dropout=0.1,
+            ff_dropout=0.1,
         )
 
         self.trans_config = TransformerConfig(

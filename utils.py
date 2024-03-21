@@ -16,9 +16,9 @@ def symlog(x):
 
 def symexp(x):
     if type(x) == np.ndarray:
-        return np.sign(x) * (np.exp(np.abs(x)) + 1)
+        return np.sign(x) * (np.exp(np.abs(x)) - 1)
     elif type(x) == torch.Tensor:
-        return torch.sign(x) * (torch.exp(torch.abs(x)) + 1)
+        return torch.sign(x) * (torch.exp(torch.abs(x)) - 1)
 
 
 

@@ -4,11 +4,13 @@ from pathlib import Path
 from collections import defaultdict
 from tqdm import tqdm
 from typing import Dict
+from einops import rearrange
+from torch.utils.data.dataloader import DataLoader
 
 import numpy as np
 import torch
 
-from agent.memory.DreamerMemory import DreamerMemory
+from agent.memory.DreamerMemory import DreamerMemory, ObsDataset
 from agent.models.DreamerModel import DreamerModel
 from agent.optim.loss import model_loss, actor_loss, value_loss, actor_rollout, trans_actor_rollout
 from agent.optim.utils import advantage
@@ -86,7 +88,7 @@ class DreamerLearner:
         perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
         self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
-                                  use_bin=config.use_bin, bins=config.bins).to(config.DEVICE).eval()
+                                  use_bin=config.use_bin, bins=config.bins, use_classification=False).to(config.DEVICE).eval()
         # -------------------------
 
         # based on latent
@@ -125,8 +127,12 @@ class DreamerLearner:
             self.rew_model.load_state_dict(checkpoint['model'])
             self.rew_model.eval()
         
+        ### world model dataset
         self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
-                                                 config.DEVICE, config.ENV_TYPE)
+                                                 config.DEVICE, config.ENV_TYPE, config.sample_temperature)
+        
+        ### tokenizer dataset
+        # self.vq_buffer = ObsDataset(config.CAPACITY, config.IN_DIM, config.NUM_AGENTS)
 
         self.entropy = config.ENTROPY
         self.step_count = -1
@@ -143,6 +149,11 @@ class DreamerLearner:
 
         if self.config.use_bin:
             print('Not using & training tokenizer...')
+
+        if self.config.critic_average_r:
+            print("Enable average mode for predicted rewards...")
+        else:
+            print("Disable average mode for predicted rewards...")
 
     def init_optimizers(self):
         # self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
@@ -179,6 +190,7 @@ class DreamerLearner:
         self.add_experience_to_dataset(rollout)
         self.mamba_replay_buffer.append(rollout['observation'], rollout['action'], rollout['reward'], rollout['done'],
                                         rollout['fake'], rollout['last'], rollout.get('avail_action'))
+        # self.vq_buffer.append(rollout['observation'])
         
         self.step_count += 1
         if self.accum_samples < self.config.N_SAMPLES:
@@ -195,12 +207,19 @@ class DreamerLearner:
         intermediate_losses = defaultdict(float)
         # train tokenzier
         if not self.config.use_bin:
-            pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
-            for i in pbar:
-                samples = self.replay_buffer.sample_batch(batch_num_samples=256,
-                                                          sequence_length=1,
-                                                          sample_from_start=True)
+            # vq_loader = DataLoader(
+            #     self.vq_buffer,
+            #     shuffle=True,
+            #     pin_memory=True,
+            #     batch_size=64,
+            #     num_workers=1,
+            # )
+            # pbar = tqdm(enumerate(vq_loader), total=len(vq_loader), desc=f"Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
+            pbar = tqdm(range(self.config.WM_EPOCHS), desc=f"Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
+            for _ in pbar:
+                samples = self.mamba_replay_buffer.sample_batch(bs=256, sl=1, mode="tokenizer")
                 samples = self._to_device(samples)
+
                 # loss_dict = self.train_tokenizer(samples)
                 if self.config.tokenizer_type == 'vq':
                     loss_dict = self.train_vq_tokenizer(samples['observation'])
@@ -225,18 +244,18 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 20:
+        if self.train_count == 15:
             print('Start training world model...')
 
-        if self.train_count > 19:
+        if self.train_count > 14:
             # train transformer-based world model
-            pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
-            for i in pbar:
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
-                                                          sequence_length=self.config.SEQ_LENGTH,
-                                                          sample_from_start=True)
+            pbar = tqdm(range(self.config.WM_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
+            for _ in pbar:
+                samples = self.mamba_replay_buffer.sample_batch(bs=self.config.MODEL_BATCH_SIZE, sl=self.config.SEQ_LENGTH, mode="model")
                 samples = self._to_device(samples)
-                loss_dict = self.train_model(samples)
+                attn_mask = self.mamba_replay_buffer.generate_attn_mask(samples["done"], self.model.config.tokens_per_block).to(self.config.DEVICE)
+
+                loss_dict = self.train_model(samples, attn_mask)
 
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
@@ -250,22 +269,25 @@ class DreamerLearner:
                     + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
                 )
 
-        if self.train_count == 45:
+        if self.train_count == 40:
             print('Start training actor & critic...')
 
-        if self.train_count > 44:
+        if self.train_count > 39:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
-                samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE * 20, # self.config.MODEL_BATCH_SIZE * 2
+                samples = self.replay_buffer.sample_batch(batch_num_samples=600, # self.config.MODEL_BATCH_SIZE * 2
                                                           sequence_length=self.config.stack_obs_num if self.config.use_stack else 1,
                                                           sample_from_start=False,
                                                           valid_sample=False)
+                
+                # samples = self.mamba_replay_buffer.sample_batch(bs=30, sl=20)
+
                 samples = self._to_device(samples)
                 self.train_agent_with_transformer(samples)
 
         wandb.log({'epoch': self.cur_wandb_epoch, **intermediate_losses})
         
-        if self.train_count % 20 == 0 and self.train_count > 19:
+        if self.train_count % 200 == 0 and self.train_count > 19:
             self.model.eval()
             self.tokenizer.eval()
             sample = self.replay_buffer.sample_batch(batch_num_samples=1,
@@ -324,12 +346,12 @@ class DreamerLearner:
     #     self.tokenizer.eval()
     #     return loss_dict
     
-    def train_model(self, samples):
+    def train_model(self, samples, attn_mask = None):
         self.tokenizer.eval()
         self.model.train()
         
         # loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
-        loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
+        loss, loss_dict = self.model.compute_loss(samples, self.tokenizer, attn_mask)
         self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm) # or GRAD_CLIP
         self.model.eval()
         return loss_dict
@@ -339,8 +361,8 @@ class DreamerLearner:
         self.model.eval()
 
         actions, av_actions, old_policy, actor_feat, critic_feat, returns \
-              = trans_actor_rollout(samples['observation'],
-                                    samples['av_action'],
+              = trans_actor_rollout(samples['observation'],  # rearrange(samples['observation'], 'b l n e -> (b l) 1 n e'),
+                                    samples['av_action'],  # rearrange(samples['av_action'], 'b l n e -> (b l) 1 n e'),
                                     samples['filled'], # samples['last']
                                     self.tokenizer, self.model,
                                     self.actor,

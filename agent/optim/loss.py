@@ -64,13 +64,6 @@ def trans_actor_rollout(obs, av_actions, filled, tokenizer, world_model, actor, 
     items_list = []
     with FreezeParameters([tokenizer, world_model]):
         wm_env = MAWorldModelEnv(tokenizer=tokenizer, world_model=world_model, device=config.DEVICE, env_name='sc2')       
-        # items = rollout_policy_trans(wm_env, actor, config.HORIZON,
-        #                              obs.reshape(-1, n_agents, obs.shape[-1]),
-        #                              av_actions.reshape(-1, n_agents, av_actions.shape[-1]),
-        #                              filled,
-        #                              use_stack = use_stack,
-        #                              stack_obs_num = stack_obs_num,
-        #                              )
         items = rollout_policy_trans(wm_env, actor, config.HORIZON,
                                      obs,
                                      av_actions,
@@ -96,13 +89,18 @@ def trans_actor_rollout(obs, av_actions, filled, tokenizer, world_model, actor, 
 
 def trans_critic_rollout(critic, critic_feats, imag_rewards, discounts, config):
     with FreezeParameters([critic]):
-        imag_rewards = imag_rewards[:-1] # imag_rewards.mean(-2, keepdim=True)[:-1]
-        # imag_rewards = imag_rewards.mean(-2, keepdim=True)[:-1]
+        if config.critic_average_r:
+            imag_rewards = imag_rewards.mean(-2, keepdim=True)[:-1]
+        else:
+            imag_rewards = imag_rewards[:-1]
+
         discounts = discounts[:-1]
         value = critic(critic_feats)
         wandb.log({'Value/Max reward': imag_rewards.max(), 'Value/Min reward': imag_rewards.min(),
                    'Value/Reward': imag_rewards.mean(), 'Value/Discount': discounts.mean(),
                    'Value/Value': value.mean()})
+        
+        print(f"Value/Max reward: {imag_rewards.max()}, Value/Min reward: {imag_rewards.min()}, Value/Value: {value.mean()}")
     
     returns = compute_return(imag_rewards, value[:-1], discounts, bootstrap=value[-1], lmbda=config.DISCOUNT_LAMBDA,
                              gamma=config.GAMMA)
