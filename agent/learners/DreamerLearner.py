@@ -89,7 +89,7 @@ class DreamerLearner:
         perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
         self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
-                                  use_bin=config.use_bin, bins=config.bins, use_classification=False).to(config.DEVICE).eval()
+                                  use_bin=config.use_bin, bins=config.bins, use_classification=False, use_symlog=True).to(config.DEVICE).eval()
         # -------------------------
 
         # based on latent

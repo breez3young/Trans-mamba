@@ -42,7 +42,7 @@ class MAWorldModelOutput:
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
                  config: TransformerConfig, perattn_config: PerceiverConfig,
-                 action_dim: int, use_bin: bool = False, bins: int = 64, use_classification: bool = False) -> None:
+                 action_dim: int, use_bin: bool = False, bins: int = 64, use_classification: bool = False, use_symlog: bool = False) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.use_bin = use_bin
@@ -167,7 +167,7 @@ class MAWorldModel(nn.Module):
         # initialize_weights(self.heads_avail_actions, mode='xavier')
         
         self.use_ib = False # use iris databuffer
-        self.use_symlog = False # whether to use symlog transformation
+        self.use_symlog = use_symlog # whether to use symlog transformation
 
         if self.use_symlog:
             print("Enable `symlog` to transform the reward targets...")
