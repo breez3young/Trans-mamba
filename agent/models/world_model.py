@@ -163,10 +163,16 @@ class MAWorldModel(nn.Module):
         self.apply(init_weights)
         
         # initialize_weights(self.head_rewards, mode='xavier')
-        initialize_weights(self.head_ends, mode='xavier')
-        initialize_weights(self.heads_avail_actions, mode='xavier')
+        # initialize_weights(self.head_ends, mode='xavier')
+        # initialize_weights(self.heads_avail_actions, mode='xavier')
         
-        self.use_ib = False # use iris databuffer 
+        self.use_ib = False # use iris databuffer
+        self.use_symlog = False # whether to use symlog transformation
+
+        if self.use_symlog:
+            print("Enable `symlog` to transform the reward targets...")
+        else:
+            print("Disable `symlog` to transform...")
 
     def __repr__(self) -> str:
         return "multi_agent_world_model"
@@ -314,7 +320,11 @@ class MAWorldModel(nn.Module):
                 loss_ends = F.cross_entropy(logits_ends, labels_ends)
 
             ### compute reward loss
-            loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward'])
+            if self.use_symlog:
+                labels_rewards = symlog(batch['reward'])
+                loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, labels_rewards)
+            else:
+                loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward'])
 
             ### compute av_action loss
             pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
@@ -517,7 +527,8 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations
         rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
         ## inverse transforming into original space
-        reward = symexp(reward)
+        if wm_env.world_model.use_symlog:
+            reward = symexp(reward)
 
         rewards.append(reward)
         dones.append(done)

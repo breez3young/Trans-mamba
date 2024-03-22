@@ -10,7 +10,7 @@ from environments import Env
 
 
 class DreamerMemory:
-    def __init__(self, capacity, sequence_length, action_size, obs_size, n_agents, device, env_type, sample_temperature):
+    def __init__(self, capacity, sequence_length, action_size, obs_size, n_agents, device, env_type, sample_temperature = 'inf'):
         self.capacity = capacity
         self.sequence_length = sequence_length
         self.action_size = action_size
@@ -125,16 +125,14 @@ class DreamerMemory:
     
         mask = torch.zeros(b * n, sequence_length, sequence_length)
         for idx in range(b):
-            has_done = dones[idx].sum(-1)
+            has_done = dones[idx][:-1].sum(-1)
             if has_done == 0:
-                mask[idx * 3 : (idx + 1) * 3] = torch.tril(torch.ones(3, sequence_length, sequence_length))
+                mask[idx * n : (idx + 1) * n] = torch.tril(torch.ones(n, sequence_length, sequence_length))
 
             else:
                 done_idx = (dones[idx] == 1).nonzero().squeeze() + 1
-                mask[idx * 3 : (idx + 1) * 3, : (done_idx * tokens_per_block), : (done_idx * tokens_per_block)] = torch.tril(torch.ones(3, done_idx * tokens_per_block, done_idx * tokens_per_block))
-
-                if t - done_idx > 0:
-                    mask[idx * 3 : (idx + 1) * 3, (done_idx * tokens_per_block) :, (done_idx * tokens_per_block) :] = torch.tril(torch.ones(3, (t - done_idx) * tokens_per_block, (t - done_idx) * tokens_per_block))
+                mask[idx * n : (idx + 1) * n, : (done_idx * tokens_per_block), : (done_idx * tokens_per_block)] = torch.tril(torch.ones(n, done_idx * tokens_per_block, done_idx * tokens_per_block))
+                mask[idx * n : (idx + 1) * n, (done_idx * tokens_per_block) :, (done_idx * tokens_per_block) :] = torch.tril(torch.ones(n, (t - done_idx) * tokens_per_block, (t - done_idx) * tokens_per_block))
         
         return mask
     

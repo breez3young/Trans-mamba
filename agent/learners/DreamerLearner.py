@@ -70,6 +70,7 @@ class DreamerLearner:
         # self.encoder_config = config.encoder_config_fn(state_dim=config.IN_DIM)
         # self.tokenizer = Tokenizer(vocab_size=config.OBS_VOCAB_SIZE, embed_dim=config.EMBED_DIM,
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
+
         if self.config.tokenizer_type == 'vq':
             self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
                                                  codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True, decay=config.ema_decay).to(config.DEVICE).eval()
@@ -251,7 +252,7 @@ class DreamerLearner:
             # train transformer-based world model
             pbar = tqdm(range(self.config.WM_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
             for _ in pbar:
-                samples = self.mamba_replay_buffer.sample_batch(bs=self.config.MODEL_BATCH_SIZE, sl=self.config.SEQ_LENGTH, mode="model")
+                samples = self.mamba_replay_buffer.sample_batch(bs=self.config.MODEL_BATCH_SIZE, sl=self.config.HORIZON, mode="model")
                 samples = self._to_device(samples)
                 attn_mask = self.mamba_replay_buffer.generate_attn_mask(samples["done"], self.model.config.tokens_per_block).to(self.config.DEVICE)
 

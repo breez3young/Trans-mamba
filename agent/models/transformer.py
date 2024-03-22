@@ -297,7 +297,7 @@ class SelfAttention(nn.Module):
 
         if kv_cache is None and attention_mask is not None:
             attention_mask = attention_mask[:, None, :, :].repeat(1, self.num_heads, 1, 1)
-            att = att.masked_fill(attention_mask[L:L + T, :L + T] == 0, float('-inf'))
+            att = att.masked_fill(attention_mask[:, :, L:L + T, :L + T] == 0, float('-inf'))
 
         else:
             att = att.masked_fill(self.mask[L:L + T, :L + T] == 0, float('-inf'))

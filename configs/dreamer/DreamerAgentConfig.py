@@ -85,7 +85,7 @@ class DreamerConfig(Config):
         )
         
         # world model params
-        self.HORIZON = 15
+        self.HORIZON = 8  # 15
         self.TRANS_EMBED_DIM = 256 # 256
         self.HEADS = 4
         self.perattn_HEADS = 4
