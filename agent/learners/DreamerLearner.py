@@ -72,7 +72,7 @@ class DreamerLearner:
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
 
         if self.config.tokenizer_type == 'vq':
-            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
+            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=128, num_tokens=config.nums_obs_token,
                                                  codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True, decay=config.ema_decay).to(config.DEVICE).eval()
             self.obs_vocab_size = config.OBS_VOCAB_SIZE
         elif self.config.tokenizer_type == 'fsq':
@@ -89,7 +89,7 @@ class DreamerLearner:
         perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
         self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
-                                  use_bin=config.use_bin, bins=config.bins, use_classification=False, use_symlog=True).to(config.DEVICE).eval()
+                                  use_bin=config.use_bin, bins=config.bins, use_classification=config.use_classification, use_symlog=False, use_ce_for_av_action=config.use_ce_for_av_action).to(config.DEVICE).eval()
         # -------------------------
 
         # based on latent
@@ -111,11 +111,14 @@ class DreamerLearner:
         self.old_critic = deepcopy(self.critic)
         
         self.replay_buffer = MultiAgentEpisodesDataset(max_ram_usage="30G", name="train_dataset", temp=20)
+        self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, config.NUM_AGENTS,
+                                                 config.DEVICE, config.ENV_TYPE, config.sample_temperature)
         
         ## (debug) pre-load mamba training buffer
         if self.config.is_preload:
             print(f"Load offline dataset from {self.config.load_path}")
-            self.replay_buffer.load_from_pkl(self.config.load_path)
+            # self.replay_buffer.load_from_pkl(self.config.load_path)
+            self.mamba_replay_buffer.load_from_pkl(self.config.load_path)
         
         if self.config.use_external_rew_model:
             from networks.dreamer.reward_estimator import Reward_estimator
@@ -129,8 +132,6 @@ class DreamerLearner:
             self.rew_model.eval()
         
         ### world model dataset
-        self.mamba_replay_buffer = DreamerMemory(config.CAPACITY, config.SEQ_LENGTH, config.ACTION_SIZE, config.IN_DIM, 2,
-                                                 config.DEVICE, config.ENV_TYPE, config.sample_temperature)
         
         ### tokenizer dataset
         # self.vq_buffer = ObsDataset(config.CAPACITY, config.IN_DIM, config.NUM_AGENTS)
@@ -159,8 +160,10 @@ class DreamerLearner:
     def init_optimizers(self):
         # self.tokenizer_optimizer = torch.optim.Adam(self.tokenizer.parameters(), lr=self.config.t_lr)
         self.tokenizer_optimizer = torch.optim.AdamW(self.tokenizer.parameters(), lr=3e-4)
+
         self.model_optimizer = configure_optimizer(self.model, self.config.wm_lr, self.config.wm_weight_decay)
-        # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR)
+        # self.model_optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.MODEL_LR, weight_decay=1e-4)
+
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.config.ACTOR_LR, weight_decay=0.00001)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.config.VALUE_LR)
 
@@ -197,7 +200,7 @@ class DreamerLearner:
         if self.accum_samples < self.config.N_SAMPLES:
             return
 
-        if self.replay_buffer.num_steps < self.config.MIN_BUFFER_SIZE:
+        if len(self.mamba_replay_buffer) < self.config.MIN_BUFFER_SIZE:
             return
 
         self.accum_samples = 0
@@ -430,6 +433,8 @@ class DreamerLearner:
     def train_wm_offline(self, epochs):
         ckpt_path = Path(self.config.RUN_DIR) / "ckpt"
         ckpt_path.mkdir(parents=True, exist_ok=True)
+
+        test_samples = self.mamba_replay_buffer.sample_batch(bs=2, sl=self.config.HORIZON, mode="tokenizer")
         
         def run_epoch(mode: str, epoch):
             self.tqdm_vis = False
@@ -449,11 +454,15 @@ class DreamerLearner:
             # train tokenizer
             pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Epoch {epoch} - Training tokenizer", file=sys.stdout, disable=not self.tqdm_vis)
             for _ in pbar:
-                samples = self.replay_buffer.sample_batch(batch_num_samples=256,
-                                                          sequence_length=1,
-                                                          sample_from_start=True)
-                samples = self._to_device(samples)
+                # samples = self.replay_buffer.sample_batch(batch_num_samples=256,
+                #                                           sequence_length=1,
+                #                                           sample_from_start=True)
+                # samples = self._to_device(samples)
+
+                samples = self.mamba_replay_buffer.sample_batch(bs=256, sl=1, mode="tokenizer")
+
                 loss, loss_dict = self.tokenizer.compute_loss(samples["observation"])
+
                 if is_train:
                     self.apply_optimizer(self.tokenizer_optimizer, self.tokenizer, loss, self.config.max_grad_norm)
                     
@@ -483,11 +492,15 @@ class DreamerLearner:
             if (epoch + 1) >= 10:
                 pbar = tqdm(range(self.config.MODEL_EPOCHS), desc=f"Epoch {epoch} - Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
                 for _ in pbar:
-                    samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
-                                                            sequence_length=self.config.SEQ_LENGTH,
-                                                            sample_from_start=True)
-                    samples = self._to_device(samples)
-                    loss, loss_dict = self.model.compute_loss(samples, self.tokenizer)
+                    # samples = self.replay_buffer.sample_batch(batch_num_samples=self.config.MODEL_BATCH_SIZE,
+                    #                                         sequence_length=self.config.SEQ_LENGTH,
+                    #                                         sample_from_start=True)
+                    # samples = self._to_device(samples)
+
+                    samples = self.mamba_replay_buffer.sample_batch(bs=self.config.MODEL_BATCH_SIZE, sl=self.config.HORIZON, mode="model")
+                    attn_mask = self.mamba_replay_buffer.generate_attn_mask(samples["done"], self.model.config.tokens_per_block).to(self.config.DEVICE)
+
+                    loss, loss_dict = self.model.compute_loss(samples, self.tokenizer, attn_mask)
                     if is_train:
                         self.apply_optimizer(self.model_optimizer, self.model, loss, self.config.max_grad_norm)
                     
@@ -509,15 +522,26 @@ class DreamerLearner:
             wandb.log({'epoch': epoch, **intermediate_losses})
             
             return tokenizer_aver_loss / self.config.MODEL_EPOCHS, model_aver_loss / self.config.MODEL_EPOCHS
+
+        @torch.no_grad()
+        def check_tokens(obs):
+            return self.tokenizer.encode(obs, True)[1]
         
-        
+        last_tokens = None
         for i in range(epochs):
             t_loss, wm_loss = run_epoch("train", i)
+
+            cur_tokens = check_tokens(test_samples['observation'])
+            if last_tokens is not None:
+                count = (cur_tokens == last_tokens).sum(-1)
+                print(count)
+
+            last_tokens = cur_tokens
             
-            if (i + 1) > 10:
+            if (i + 1) > 100:
                 self.save(ckpt_path / f"epoch_{i}.pth")
             
-            if (i + 1) % 20 == 0:
+            if (i + 1) % 200 == 0:
                 self.model.eval()
                 self.tokenizer.eval()
                 
@@ -527,7 +551,7 @@ class DreamerLearner:
                                                          valid_sample=True)
                 sample = self._to_device(sample)
                 self.model.visualize_attn(sample, self.tokenizer, Path(self.config.RUN_DIR) / "visualization" / "attn" / f"epoch_{i + 1}")
-    
+
     
     ### for training actor and critic only
     def train_actor_only(self, rollout):

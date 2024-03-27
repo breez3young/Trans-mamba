@@ -110,7 +110,7 @@ class MAWorldModelEnv:
 
         token = action.clone().detach() if isinstance(action, torch.Tensor) else torch.tensor(action, dtype=torch.long).clone().detach()
         perattn_placeholder = torch.empty(*token.shape[:-1], 1, dtype=torch.long, device=token.device)
-        token = torch.cat([perattn_placeholder, token], dim=-1)
+        token = torch.cat([token, perattn_placeholder], dim=-1)
 
         token = rearrange(token, 'b n k -> (b n) k').to(self.device)  # (B, N)
 
@@ -129,11 +129,17 @@ class MAWorldModelEnv:
                 else:
                     # done = Categorical(logits=outputs_wm.logits_ends).sample()
                     done_probs = F.softmax(outputs_wm.logits_ends, dim=-1)
-                    done = done_probs[..., 0]
+                    done = done_probs[..., 0].unsqueeze(-1)
 
                 if self.predict_avail_action:
-                    avail_action_dist = td.independent.Independent(td.Bernoulli(logits=outputs_wm.pred_avail_action), 1)
-                    avail_action = avail_action_dist.sample()
+
+                    if not self.world_model.use_ce_for_av_action:
+                        avail_action_dist = td.independent.Independent(td.Bernoulli(logits=outputs_wm.pred_avail_action), 1)
+                        avail_action = avail_action_dist.sample()
+                    else:
+                        avail_action_dist = Categorical(logits=outputs_wm.pred_avail_action)
+                        avail_action = avail_action_dist.sample()
+
                 else:
                     avail_action = None
 
@@ -148,16 +154,20 @@ class MAWorldModelEnv:
         obs_tokens = torch.cat(obs_tokens, dim=1)             # (B, K)
 
         self.obs_tokens = rearrange(obs_tokens, '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
-        # reward = rearrange(reward, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
-        reward = reward.squeeze(1)
-        # done = rearrange(done, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
-        done = done.squeeze(1)
-        # avail_action = rearrange(avail_action, '(b n) 1 e -> b n e', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if avail_action is not None else None
-        avail_action = avail_action.squeeze(1) if avail_action is not None else None
+        
+        reward = rearrange(reward, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
+        # reward = reward.squeeze(1)
+        
+        done = rearrange(done, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
+        # done = done.squeeze(1)
+        
+        avail_action = rearrange(avail_action, '(b n) 1 e -> b n e', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if avail_action is not None else None
+        # avail_action = avail_action.squeeze(1) if avail_action is not None else None
         
         obs = self.decode_obs_tokens() if should_predict_next_obs else None # obs is tensor
         critic_feat = rearrange(output_sequence[:, -1], '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents) if should_predict_next_obs else None
         # share_obs = self.world_model.get_perceiver_attn_out(self.tokenizer.embedding(self.obs_tokens))
+
         return obs, reward, done, avail_action, critic_feat # o_t+1, r_t
 
     ## unmodified

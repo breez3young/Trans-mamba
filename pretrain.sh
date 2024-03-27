@@ -2,10 +2,10 @@
 unset LD_LIBRARY_PATH
 export SC2PATH="/mnt/data/optimal/zhangyang/StarCraftII"
 
-map_name="2m_vs_1z"
+map_name="so_many_baneling"
 env="starcraft"
 
-CUDA_VISIBLE_DEVICES=0 python pretrain_wm.py --env ${env} --map ${map_name} --num_steps 50000 \
-                                             --mode disabled \
+CUDA_VISIBLE_DEVICES=1 python pretrain_wm.py --env ${env} --map ${map_name} --num_steps 30000 \
+                                             --mode online \
                                              --tokenizer vq --decay 0.8 \
-                                             --epochs 500
+                                             --epochs 500 --ce_for_av --ce_for_end

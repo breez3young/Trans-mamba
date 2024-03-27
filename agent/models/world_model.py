@@ -18,7 +18,7 @@ from matplotlib.colors import LinearSegmentedColormap
 
 # from dataset import Batch
 from .kv_caching import KeysValues
-from .slicer import Embedder, Head, Slicer
+from .slicer import Embedder, Head, Slicer, SpecialHead, DiscreteDist
 from .tokenizer import Tokenizer
 
 from .transformer import Transformer, TransformerConfig, get_sinusoid_encoding_table
@@ -42,7 +42,9 @@ class MAWorldModelOutput:
 class MAWorldModel(nn.Module):
     def __init__(self, obs_vocab_size: int, act_vocab_size: int, num_action_tokens: int, num_agents: int,
                  config: TransformerConfig, perattn_config: PerceiverConfig,
-                 action_dim: int, use_bin: bool = False, bins: int = 64, use_classification: bool = False, use_symlog: bool = False) -> None:
+                 action_dim: int, use_bin: bool = False, bins: int = 64,
+                 ### options for setting prediction head
+                 use_classification: bool = False, use_symlog: bool = False, use_ce_for_av_action: bool = True) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.use_bin = use_bin
@@ -66,7 +68,8 @@ class MAWorldModel(nn.Module):
         self.transformer = Transformer(config)
 
         act_tokens_pattern = torch.zeros(config.tokens_per_block)
-        act_tokens_pattern[-num_action_tokens:] = 1
+        # act_tokens_pattern[-num_action_tokens:] = 1 
+        act_tokens_pattern[-1 - num_action_tokens : -1] = 1   ### modified at 0326
         self.act_tokens_pattern = act_tokens_pattern
 
         obs_tokens_pattern = torch.zeros(config.tokens_per_block)
@@ -83,7 +86,8 @@ class MAWorldModel(nn.Module):
 
         ### Perceiver Attention output pattern
         perattn_pattern = torch.zeros(config.tokens_per_block)
-        perattn_pattern[-num_action_tokens - 1 : -num_action_tokens] = 1
+        # perattn_pattern[-num_action_tokens - 1 : -num_action_tokens] = 1
+        perattn_pattern[-1] = 1
         self.perattn_pattern = perattn_pattern
 
         # self.obs_embeddings_slicer = Slicer(max_blocks=config.max_blocks, block_mask=obs_autoregress_pattern)
@@ -114,7 +118,9 @@ class MAWorldModel(nn.Module):
             block_mask=all_but_last_pattern,
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ELU(),
+                nn.ReLU(),
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ReLU(),
                 nn.Linear(config.embed_dim, 1),
             )
         )
@@ -130,22 +136,42 @@ class MAWorldModel(nn.Module):
             block_mask=all_but_last_pattern,
             head_module=nn.Sequential(
                 nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ELU(),
+                nn.ReLU(),
+                nn.Linear(config.embed_dim, config.embed_dim),
+                nn.ReLU(),
                 nn.Linear(config.embed_dim, 2 if use_classification else 1),
             )
         )
 
         self.action_dim = action_dim
+        self.use_ce_for_av_action = use_ce_for_av_action
         ## 注意这个avail_actions预测的是下一时刻的avail_actions
-        self.heads_avail_actions = Head(
-            max_blocks=config.max_blocks,
-            block_mask=all_but_last_pattern,
-            head_module=nn.Sequential(
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ELU(),
-                nn.Linear(config.embed_dim, action_dim),
+        if use_ce_for_av_action:
+            print("Use cross-entropy to train the prediction of av_action...")
+        else:
+            print("Use log-prob to train the prediction of av_action...")
+
+        if not self.use_ce_for_av_action:
+            self.heads_avail_actions = Head(
+                max_blocks=config.max_blocks,
+                block_mask=all_but_last_pattern,
+                head_module=nn.Sequential(
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, action_dim),
+                )
             )
-        )
+        
+        else:
+            self.heads_avail_actions = Head(
+                max_blocks=config.max_blocks,
+                block_mask=all_but_last_pattern,
+                head_module=DiscreteDist(
+                    config.embed_dim, self.act_vocab_size, 2, 256
+                )
+            )
 
         # info_loss head
         # self.head_last_action = Head(
@@ -164,7 +190,7 @@ class MAWorldModel(nn.Module):
         
         # initialize_weights(self.head_rewards, mode='xavier')
         # initialize_weights(self.head_ends, mode='xavier')
-        # initialize_weights(self.heads_avail_actions, mode='xavier')
+        initialize_weights(self.heads_avail_actions, mode='xavier')
         
         self.use_ib = False # use iris databuffer
         self.use_symlog = use_symlog # whether to use symlog transformation
@@ -206,13 +232,22 @@ class MAWorldModel(nn.Module):
         # logits_last_action = rearrange(logits_last_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         pred_rewards = self.head_rewards(x, num_steps=num_steps, prev_steps=prev_steps)
-        pred_rewards = rearrange(pred_rewards, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
+        ## with new special head
+        # pred_rewards = self.head_rewards(x, perattn_out, num_steps=num_steps, prev_steps=prev_steps)
+
+        # pred_rewards = rearrange(pred_rewards, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         logits_ends = self.head_ends(x, num_steps=num_steps, prev_steps=prev_steps)
-        logits_ends = rearrange(logits_ends, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
+        ## with new special head
+        # logits_ends = self.head_ends(x, perattn_out, num_steps=num_steps, prev_steps=prev_steps)
+
+        # logits_ends = rearrange(logits_ends, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         logits_avail_action = self.heads_avail_actions(x, num_steps=num_steps, prev_steps=prev_steps)
-        logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
+        ## with new special head
+        # logits_avail_action = self.heads_avail_actions(x, perattn_out, num_steps=num_steps, prev_steps=prev_steps)
+
+        # logits_avail_action = rearrange(logits_avail_action, '(b n) l e -> b l n e', b=int(bs / self.num_agents), n=self.num_agents)
 
         return MAWorldModelOutput(x, logits_observations, pred_rewards, logits_ends, logits_avail_action, attn_output=attn_output)
 
@@ -253,7 +288,8 @@ class MAWorldModel(nn.Module):
         perattn_out = self.perattn(input_encodings)
         perattn_out = rearrange(perattn_out, '(b l) n e -> (b n) l e', b=b, l=l, n=N)
 
-        tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1) # (B, L, (K+N))
+        # tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1) # (B, L, (K+N))
+        tokens = torch.cat([obs_tokens, act_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long)], dim=-1) # (B, L, (K+N))
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
 
         outputs = self(tokens, perattn_out = perattn_out, attention_mask = attention_mask)
@@ -313,22 +349,31 @@ class MAWorldModel(nn.Module):
             ### compute discount loss
             if not self.use_classification:
                 pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
-                loss_ends = -torch.mean(pred_ends.log_prob((1. - batch['done'])))
+                loss_ends = -torch.mean(pred_ends.log_prob((1. - rearrange(batch['done'], 'b l n 1 -> (b n) l 1'))))
             else:
-                logits_ends = rearrange(outputs.logits_ends, 'b l n e -> (b l n) e')
-                labels_ends = rearrange(batch['done'], 'b l n 1 -> (b l n)').to(torch.long)
+                logits_ends = rearrange(outputs.logits_ends, 'b l e -> (b l) e')
+                labels_ends = rearrange(batch['done'], 'b l n 1 -> (b n l)').to(torch.long)
                 loss_ends = F.cross_entropy(logits_ends, labels_ends)
 
             ### compute reward loss
+            labels_rewards = rearrange(batch['reward'], 'b l n 1 -> (b n) l 1')
             if self.use_symlog:
-                labels_rewards = symlog(batch['reward'])
+                labels_rewards = symlog(labels_rewards)
                 loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, labels_rewards)
             else:
-                loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, batch['reward'])
+                loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, labels_rewards)
 
             ### compute av_action loss
-            pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
-            loss_av_actions = -torch.mean(pred_av_actions.log_prob(batch['av_action'][:, 1:]))
+            ## for cross-entropy loss
+            if self.use_ce_for_av_action:
+                logits_av_actions = rearrange(outputs.pred_avail_action[:, :-1], 'b l a e -> (b l a) e')
+                labels_av_actions = rearrange(batch['av_action'], 'b l n e -> (b n) l e')[:, 1:].reshape(-1,).to(torch.long)
+                loss_av_actions = F.cross_entropy(logits_av_actions, labels_av_actions)
+            
+            else:
+                pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
+                labels_av_actions = rearrange(batch['av_action'], 'b l n e -> (b n) l e')
+                loss_av_actions = -torch.mean(pred_av_actions.log_prob(labels_av_actions[:, 1:]))
 
             info_loss = 0.
 
@@ -411,7 +456,7 @@ class MAWorldModel(nn.Module):
         b, l, n, e = perattn_out.shape
         perattn_out = rearrange(perattn_out, 'b l n e -> (b n) l e', b=b, l=l, n=n)
         
-        tokens = torch.cat([obs_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long), act_tokens], dim=-1)
+        tokens = torch.cat([obs_tokens, act_tokens, torch.empty_like(act_tokens, device=device, dtype=torch.long)], dim=-1)
         tokens = rearrange(tokens.transpose(1, 2), 'b n l k -> (b n) (l k)')  # (B, L(K+N))
 
         outputs = self(tokens, perattn_out = perattn_out, return_attn=True)

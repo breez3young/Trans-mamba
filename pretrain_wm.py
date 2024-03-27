@@ -14,7 +14,10 @@ import wandb
 offline_dataset_path = {
     '2m_vs_1z_20K': "/mnt/data/optimal/zhangyang/.offline_dt/mamba_20k.pkl",
     '2m_vs_1z_50K': "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl",
+    'so_many_baneling_30K': "/home/zhangyang/.offline_dt/mamba_smb_30k.pkl", 
+    'so_many_baneling_50K': "/home/zhangyang/.offline_dt/mamba_smb_50k.pkl",
 }
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser(add_help=False)
@@ -25,6 +28,9 @@ def get_args_parser():
     
     parser.add_argument('--tokenizer', type=str, default='vq')
     parser.add_argument('--decay', type=float, default=0.8)
+
+    parser.add_argument('--ce_for_av', action='store_true')
+    parser.add_argument('--ce_for_end', action='store_true')
     
     ## wandb mode
     parser.add_argument('--mode', type=str, default='disabled')
@@ -53,11 +59,23 @@ def main(args):
     ## setting tokenizer type
     learner_config.tokenizer_type = args.tokenizer
     learner_config.ema_decay = args.decay
+    learner_config.sample_temperature = 'inf'
+
+    ## setting world model parameters
+    learner_config.use_classification = args.ce_for_end
+    learner_config.use_ce_for_av_action = args.ce_for_av
+    post_fix = ""
+    if args.ce_for_end:
+        post_fix += "ce_on_end"
+    
+    if args.ce_for_av:
+        post_fix += "_ce_on_av_"
     
     ## make run directory
-    save_path = Path("pretrained_weights") / f'pretrained_wm' / (f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3])
+    save_path = Path("pretrained_weights") / f'new_pretrained_wm' / (f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}_" + post_fix + datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3])
     save_path.mkdir(parents=True, exist_ok=True)
     learner_config.RUN_DIR = str(save_path)
+    print(f"Run is saved to {str(save_path)}...")
     
     ## wandb initialize
     wandb.init(
@@ -65,7 +83,7 @@ def main(args):
         mode=args.mode,
         project="0301_sc2",
         group="(pretrain) mawm",
-        name=f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}",
+        name=f"mawm_{args.map}_{learner_config.tokenizer_type}_{args.num_steps // 1000}K_obs{learner_config.nums_obs_token}" + post_fix,
     )
     
     # do training

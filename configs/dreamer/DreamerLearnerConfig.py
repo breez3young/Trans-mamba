@@ -66,11 +66,11 @@ class DreamerLearnerConfig(DreamerConfig):
         # debug
         self.is_preload = False
         # /mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl
-        self.load_path = "/mnt/data/optimal/zhangyang/.offline_dt/mamba_50k.pkl"
+        self.load_path = "/home/zhangyang/.offline_dt/mamba_smb_30k.pkl"
 
         self.use_external_rew_model = False
 
-        self.sample_temperature = 20.
+        self.sample_temperature = 'inf'
 
         ## control whether average the predicted rewards
         self.critic_average_r = False

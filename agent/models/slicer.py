@@ -37,6 +37,40 @@ class Head(Slicer):
     def forward(self, x: torch.Tensor, num_steps: int, prev_steps: int) -> torch.Tensor:
         x_sliced = x[:, self.compute_slice(num_steps, prev_steps)]  # x is (B, T, E)
         return self.head_module(x_sliced)
+    
+
+class SpecialHead(Slicer):
+    def __init__(self, max_blocks: int, block_mask: torch.Tensor, head_module: nn.Module) -> None:
+        super().__init__(max_blocks, block_mask)
+        assert isinstance(head_module, nn.Module)
+        self.head_module = head_module
+
+    def forward(self, x: torch.Tensor, perattn_feat: torch.Tensor, num_steps: int, prev_steps: int) -> torch.Tensor:
+        x_sliced = x[:, self.compute_slice(num_steps, prev_steps)]  # x is (B, T, E)
+        
+        feat = torch.cat([x_sliced, perattn_feat], dim=-1)
+
+        return self.head_module(feat)
+
+from torch.distributions import OneHotCategorical
+class DiscreteDist(nn.Module):
+    def __init__(self, in_dim, n_categoricals, n_classes, hidden_size):
+        super().__init__()
+        self.n_categoricals = n_categoricals
+        self.n_classes = n_classes
+        self.dists = nn.Sequential(nn.Linear(in_dim, hidden_size),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden_size, hidden_size),
+                                   nn.ReLU(),
+                                   nn.Linear(hidden_size, n_classes * n_categoricals))
+
+    def forward(self, x):
+        logits = self.dists(x).view(x.shape[:-1] + (self.n_categoricals, self.n_classes))
+        # class_dist = OneHotCategorical(logits=logits)
+        # one_hot = class_dist.sample()
+        # latents = one_hot + class_dist.probs - class_dist.probs.detach()
+        # return logits.view(x.shape[:-1] + (-1,)), latents.view(x.shape[:-1] + (-1,))
+        return logits
 
 
 class Embedder(nn.Module):

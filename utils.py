@@ -192,6 +192,12 @@ def generate_group_name(args, config):
         g_name = f'{args.env_name}_H{config.HORIZON}_T{config.nums_obs_token}_Vocab{config.OBS_VOCAB_SIZE}_{args.tokenizer}'
         if args.tokenizer == 'vq':
             g_name += f"_decay{config.ema_decay}"
+
+        if args.ce_for_av:
+            g_name += f"_ce_on_av"
+        
+        if args.ce_for_end:
+            g_name += f"_ce_on_end"
     
     return g_name
 

@@ -140,9 +140,9 @@ class DreamerRunner:
             # train actor only
             self.learner.train_actor_only(rollout)
 
-            if (save_interval_steps - last_save_steps) > 1000:
-                self.learner.save(self.learner.config.RUN_DIR + f"/ckpt/model_{save_interval_steps // 1000}Ksteps.pth")
-                last_save_steps = save_interval_steps // 1000 * 1000
+            if (save_interval_steps - last_save_steps) > 10000:
+                self.learner.save(self.learner.config.RUN_DIR + f"/ckpt/model_{save_interval_steps // 10000}Ksteps.pth")
+                last_save_steps = save_interval_steps // 10000 * 10000
 
             if cur_episode >= max_episodes or cur_steps >= max_steps:
                 break

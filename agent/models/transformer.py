@@ -161,7 +161,8 @@ class Perceiver(nn.Module):
                  ) -> None:
         super().__init__()
 
-        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim) * 0.02)
+        # self.latents = nn.Parameter(torch.randn(num_latents, latent_dim) * 0.02)
+        self.latents = nn.Parameter(torch.randn(num_latents, latent_dim))
 
         self.cross_attn_blocks = nn.ModuleList([
             PreNorm(latent_dim, PerAttention(latent_dim, dim, heads = cross_heads, dim_head = cross_dim_head, dropout = attn_dropout), context_dim=dim),

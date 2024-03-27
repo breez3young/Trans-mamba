@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import pickle
 import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import Dataset, random_split
@@ -125,7 +126,7 @@ class DreamerMemory:
     
         mask = torch.zeros(b * n, sequence_length, sequence_length)
         for idx in range(b):
-            has_done = dones[idx][:-1].sum(-1)
+            has_done = dones[idx][:-1].sum()
             if has_done == 0:
                 mask[idx * n : (idx + 1) * n] = torch.tril(torch.ones(n, sequence_length, sequence_length))
 
@@ -185,6 +186,34 @@ class DreamerMemory:
         return {'observation': observation.transpose(1, 0), 'reward': reward.transpose(1, 0), 'action': action.transpose(1, 0), 'done': done.transpose(1, 0), 
                 'fake': fake.transpose(1, 0), 'last': last.transpose(1, 0), 'av_action': av_action.transpose(1, 0)}
     
+    def load_from_pkl(self, dataset_path, remove_fake=True):
+        with open(dataset_path, 'rb+') as f:
+            data = pickle.load(f)
+        
+        if remove_fake:
+            valid_indices = np.argwhere(data["fakes"].all(-2).squeeze() == False).squeeze().tolist()
+            data['observations'] = data['observations'][valid_indices]
+            data['actions'] = data['actions'][valid_indices]
+            data['av_actions'] = data['av_actions'][valid_indices]
+            data['rewards'] = data['rewards'][valid_indices]
+            data['dones'] = data['dones'][valid_indices]
+
+        db_size = data['observations'].shape[0]
+        assert self.capacity >= db_size
+        self.next_idx = db_size
+
+        self.observations[:self.next_idx] = data['observations']
+        self.actions[:self.next_idx] = data['actions']
+        self.av_actions[:self.next_idx] = data['av_actions']
+        self.rewards[:self.next_idx] = data['rewards']
+        self.dones[:self.next_idx] = data['dones']
+        
+        self.size += db_size
+        self.next_idx = self.next_idx % self.capacity
+        self.full = self.full or self.next_idx == 0
+        if self.full:
+            self.size = self.capacity
+
 
 class ObsDataset(Dataset):
     def __init__(self, capacity, obs_size, n_agents):

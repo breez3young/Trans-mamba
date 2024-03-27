@@ -4,6 +4,7 @@ test_plot_results
 wandb
 results
 pretrained_weights
+0327_results
 __pycache__
 
 # Byte-compiled / optimized / DLL files
