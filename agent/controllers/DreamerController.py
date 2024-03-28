@@ -28,7 +28,7 @@ class DreamerController:
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).eval()
 
         if config.tokenizer_type == 'vq':
-            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=128, num_tokens=config.nums_obs_token,
+            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
                                                  codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True).eval()
             self.obs_vocab_size = config.OBS_VOCAB_SIZE
         elif config.tokenizer_type == 'fsq':

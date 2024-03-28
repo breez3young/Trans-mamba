@@ -39,7 +39,7 @@ class DreamerLearnerConfig(DreamerConfig):
         self.BATCH_SIZE = 30 # 40; 27m bs should be 8, agents_num ~ 10 should be 20
         # self.SEQ_LENGTH = 20
         self.SEQ_LENGTH = self.HORIZON
-        self.N_SAMPLES = 200  # 1
+        self.N_SAMPLES = 1  # 1
         self.TARGET_UPDATE = 20  # 1
         self.DEVICE = 'cuda'
         self.GRAD_CLIP = 100.0

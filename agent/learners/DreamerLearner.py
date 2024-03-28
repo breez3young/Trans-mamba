@@ -72,7 +72,7 @@ class DreamerLearner:
         #                            encoder=StateEncoder(self.encoder_config), decoder=StateDecoder(self.encoder_config)).to(config.DEVICE).eval()
 
         if self.config.tokenizer_type == 'vq':
-            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=128, num_tokens=config.nums_obs_token,
+            self.tokenizer = SimpleVQAutoEncoder(in_dim=config.IN_DIM, embed_dim=32, num_tokens=config.nums_obs_token,
                                                  codebook_size=config.OBS_VOCAB_SIZE, learnable_codebook=False, ema_update=True, decay=config.ema_decay).to(config.DEVICE).eval()
             self.obs_vocab_size = config.OBS_VOCAB_SIZE
         elif self.config.tokenizer_type == 'fsq':
@@ -87,9 +87,20 @@ class DreamerLearner:
         # world model (transformer)
         obs_vocab_size = config.bins if config.use_bin else config.OBS_VOCAB_SIZE
         perattn_config = config.perattn_config(num_latents=config.NUM_AGENTS)
+        rewards_prediction_config = {
+            'loss_type': 'hlgauss',
+            'min_v': -1, 
+            'max_v': 5,
+            'bins': 255,
+        }
+
         self.model = MAWorldModel(obs_vocab_size=obs_vocab_size, act_vocab_size=config.ACTION_SIZE, num_action_tokens=1, num_agents=config.NUM_AGENTS,
                                   config=config.trans_config, perattn_config=perattn_config, action_dim=config.ACTION_SIZE,
-                                  use_bin=config.use_bin, bins=config.bins, use_classification=config.use_classification, use_symlog=False, use_ce_for_av_action=config.use_ce_for_av_action).to(config.DEVICE).eval()
+                                  ### used for bins (no tokenizer)
+                                  use_bin=config.use_bin, bins=config.bins,
+                                  ### used for setting the prediction head
+                                  use_symlog=False, use_ce_for_end=config.use_ce_for_end, use_ce_for_av_action=config.use_ce_for_av_action,
+                                  use_ce_for_reward=True, rewards_prediction_config=rewards_prediction_config).to(config.DEVICE).eval()
         # -------------------------
 
         # based on latent
@@ -248,10 +259,10 @@ class DreamerLearner:
                 for loss_name, loss_value in loss_dict.items():
                     intermediate_losses[loss_name] += loss_value / self.config.MODEL_EPOCHS
 
-        if self.train_count == 15:
+        if self.train_count == 10:
             print('Start training world model...')
 
-        if self.train_count > 14:
+        if self.train_count > 9:
             # train transformer-based world model
             pbar = tqdm(range(self.config.WM_EPOCHS), desc=f"Training {str(self.model)}", file=sys.stdout, disable=not self.tqdm_vis)
             for _ in pbar:
@@ -273,10 +284,10 @@ class DreamerLearner:
                     + f"av loss: {loss_dict['world_model/loss_av_actions']:.3f} | "
                 )
 
-        if self.train_count == 40:
+        if self.train_count == 20:
             print('Start training actor & critic...')
 
-        if self.train_count > 39:
+        if self.train_count > 19:
             # train actor-critic
             for i in tqdm(range(self.config.EPOCHS), desc=f"Training actor-critic", file=sys.stdout, disable=not self.tqdm_vis):
                 samples = self.replay_buffer.sample_batch(batch_num_samples=600, # self.config.MODEL_BATCH_SIZE * 2

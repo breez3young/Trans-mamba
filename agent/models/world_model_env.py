@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 import torchvision
 
-from utils import action_split_into_bins, discretize_into_bins, bins2continuous
+from utils import action_split_into_bins, discretize_into_bins, bins2continuous, symexp
 
 import ipdb
 
@@ -120,10 +120,19 @@ class MAWorldModelEnv:
             output_sequence.append(outputs_wm.output_sequence)
             
             if k == 0:
-                reward = outputs_wm.pred_rewards.float()
+
+                if not self.world_model.use_ce_for_reward:
+                    reward = outputs_wm.pred_rewards.float().squeeze(-2)
+
+                else:
+                    probs = F.softmax(outputs_wm.pred_rewards, dim=-1)
+                    reward = self.world_model.reward_loss.transform_from_probs(probs)
+                
+                if self.world_model.use_symlog:
+                    reward = symexp(reward)
                 
                 # done = Categorical(logits=outputs_wm.logits_ends).sample().unsqueeze(-1).to(torch.bool)  # (B,), numpy
-                if not self.world_model.use_classification:
+                if not self.world_model.use_ce_for_end:
                     pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs_wm.logits_ends), 1)
                     done = pred_ends.mean
                 else:
@@ -155,7 +164,7 @@ class MAWorldModelEnv:
 
         self.obs_tokens = rearrange(obs_tokens, '(b n) k -> b n k', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
         
-        reward = rearrange(reward, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
+        reward = rearrange(reward, '(b n) 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)
         # reward = reward.squeeze(1)
         
         done = rearrange(done, '(b n) 1 1 -> b n 1', b=int(obs_tokens.size(0) / self.n_agents), n=self.n_agents)

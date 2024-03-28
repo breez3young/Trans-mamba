@@ -23,6 +23,7 @@ from .tokenizer import Tokenizer
 
 from .transformer import Transformer, TransformerConfig, get_sinusoid_encoding_table
 from .transformer import Perceiver, PerceiverConfig
+from .reward_utils import losses_dict
 
 from .world_model_env import MAWorldModelEnv
 from utils import init_weights, action_split_into_bins, discretize_into_bins, initialize_weights, symlog, symexp
@@ -44,7 +45,8 @@ class MAWorldModel(nn.Module):
                  config: TransformerConfig, perattn_config: PerceiverConfig,
                  action_dim: int, use_bin: bool = False, bins: int = 64,
                  ### options for setting prediction head
-                 use_classification: bool = False, use_symlog: bool = False, use_ce_for_av_action: bool = True) -> None:
+                 use_symlog: bool = False, use_ce_for_end: bool = False, use_ce_for_av_action: bool = True, 
+                 use_ce_for_reward: bool = False, rewards_prediction_config: dict = None) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.use_bin = use_bin
@@ -113,20 +115,53 @@ class MAWorldModel(nn.Module):
         )
 
         ## 加入适合dense的reward predictor
-        self.head_rewards = Head(
-            max_blocks=config.max_blocks,
-            block_mask=all_but_last_pattern,
-            head_module=nn.Sequential(
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ReLU(),
-                nn.Linear(config.embed_dim, config.embed_dim),
-                nn.ReLU(),
-                nn.Linear(config.embed_dim, 1),
+        self.use_symlog = use_symlog  # whether to use symlog transformation
+        self.use_ce_for_reward = use_ce_for_reward
+        if use_ce_for_reward:
+            print("Use cross-entropy to train the prediction of reward...")
+        else:
+            print("Use SmoothL1Loss to train the prediction of reward...")
+
+        if not self.use_ce_for_reward:
+            self.head_rewards = Head(
+                max_blocks=config.max_blocks,
+                block_mask=all_but_last_pattern,
+                head_module=nn.Sequential(
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, 1),
+                )
             )
-        )
+
+        else:
+            assert rewards_prediction_config is not None
+            self.use_symlog = True
+            bin_width = (rewards_prediction_config["max_v"] - rewards_prediction_config["min_v"]) / rewards_prediction_config["bins"]
+            self.reward_loss = losses_dict[rewards_prediction_config["loss_type"]](
+                min_value = rewards_prediction_config["min_v"],
+                max_value = rewards_prediction_config["max_v"],
+                num_bins = rewards_prediction_config["bins"],
+                sigma = bin_width * 0.75
+            )
+            print(f'Use {self.reward_loss} for discrete labels...')
+
+            self.head_rewards = Head(
+                max_blocks=config.max_blocks,
+                block_mask=all_but_last_pattern,
+                head_module=nn.Sequential(
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, config.embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(config.embed_dim, self.reward_loss.output_dim),
+                )
+            )
         
-        self.use_classification = use_classification
-        if use_classification:
+
+        self.use_ce_for_end = use_ce_for_end
+        if use_ce_for_end:
             print("Use cross-entropy to train the prediction of termination...")
         else:
             print("Use log-prob to train the prediction of termination...")
@@ -139,7 +174,7 @@ class MAWorldModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(config.embed_dim, config.embed_dim),
                 nn.ReLU(),
-                nn.Linear(config.embed_dim, 2 if use_classification else 1),
+                nn.Linear(config.embed_dim, 2 if use_ce_for_end else 1),
             )
         )
 
@@ -190,15 +225,14 @@ class MAWorldModel(nn.Module):
         
         # initialize_weights(self.head_rewards, mode='xavier')
         # initialize_weights(self.head_ends, mode='xavier')
-        initialize_weights(self.heads_avail_actions, mode='xavier')
+        # initialize_weights(self.heads_avail_actions, mode='xavier')
         
         self.use_ib = False # use iris databuffer
-        self.use_symlog = use_symlog # whether to use symlog transformation
-
         if self.use_symlog:
             print("Enable `symlog` to transform the reward targets...")
         else:
             print("Disable `symlog` to transform...")
+
 
     def __repr__(self) -> str:
         return "multi_agent_world_model"
@@ -347,7 +381,7 @@ class MAWorldModel(nn.Module):
             loss_obs /= dones.size(0)
 
             ### compute discount loss
-            if not self.use_classification:
+            if not self.use_ce_for_end:
                 pred_ends = td.independent.Independent(td.Bernoulli(logits=outputs.logits_ends), 1)
                 loss_ends = -torch.mean(pred_ends.log_prob((1. - rearrange(batch['done'], 'b l n 1 -> (b n) l 1'))))
             else:
@@ -359,20 +393,29 @@ class MAWorldModel(nn.Module):
             labels_rewards = rearrange(batch['reward'], 'b l n 1 -> (b n) l 1')
             if self.use_symlog:
                 labels_rewards = symlog(labels_rewards)
-                loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, labels_rewards)
+            
+            if self.use_ce_for_reward:
+                labels_rewards = rearrange(labels_rewards, 'b l 1 -> (b l 1)')
+                logits_rewards = rearrange(outputs.pred_rewards, 'b l e -> (b l) e')
+                loss_rewards = self.reward_loss(logits_rewards, labels_rewards)
+
             else:
                 loss_rewards = F.smooth_l1_loss(outputs.pred_rewards, labels_rewards)
 
             ### compute av_action loss
+            tmp = torch.roll(batch['done'], 1, dims=1).squeeze(-1)
+            labels_av_actions = batch['av_action']
+            labels_av_actions[tmp == True] = torch.ones_like(labels_av_actions[tmp == True], device=device)
+            
             ## for cross-entropy loss
             if self.use_ce_for_av_action:
                 logits_av_actions = rearrange(outputs.pred_avail_action[:, :-1], 'b l a e -> (b l a) e')
-                labels_av_actions = rearrange(batch['av_action'], 'b l n e -> (b n) l e')[:, 1:].reshape(-1,).to(torch.long)
+                labels_av_actions = rearrange(labels_av_actions, 'b l n e -> (b n) l e')[:, 1:].reshape(-1,).to(torch.long)
                 loss_av_actions = F.cross_entropy(logits_av_actions, labels_av_actions)
             
             else:
                 pred_av_actions = td.independent.Independent(td.Bernoulli(logits=outputs.pred_avail_action[:, :-1]), 1)
-                labels_av_actions = rearrange(batch['av_action'], 'b l n e -> (b n) l e')
+                labels_av_actions = rearrange(labels_av_actions, 'b l n e -> (b n) l e')
                 loss_av_actions = -torch.mean(pred_av_actions.log_prob(labels_av_actions[:, 1:]))
 
             info_loss = 0.
@@ -571,10 +614,6 @@ def rollout_policy_trans(wm_env: MAWorldModelEnv, policy, horizons, observations
 
         rec_obs, reward, done, av_action, critic_feat = wm_env.step(torch.argmax(action, dim=-1).unsqueeze(-1), should_predict_next_obs=(t < horizons - 1))
         
-        ## inverse transforming into original space
-        if wm_env.world_model.use_symlog:
-            reward = symexp(reward)
-
         rewards.append(reward)
         dones.append(done)
 
